@@ -2,6 +2,7 @@ from serpent.game_agent import GameAgent
 import time
 from datetime import datetime
 import os
+import psutil
 import gc
 import offshoot
 import pyautogui
@@ -28,16 +29,15 @@ ZOOM_KILL_MOVE = "kill_move"
 class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
     def __init__(self, **kwargs):
+        print("Game agent initiating")
         super().__init__(**kwargs)
 
+        self.process = psutil.Process(os.getpid())
+
         self.window_dim = (self.game.window_geometry['height'], self.game.window_geometry['width'], 3)
+        print("Game runs in native resolution:", self.window_dim)
         self.memory_timeframe = 6  #at 2 FPS means 3 seconds of history
-        self.game_frame_buffer = FrameGrabber.get_frames(
-                                                        [0, 1, 2, 3],
-                                                        frame_type="PIPELINE"
-                                                        #pipeline_string="PIPELINE|RESIZE:100,100"
-                                                        )
-        self.window_dim = (self.game.window_geometry['height'], self.game.window_geometry['width'], 3)
+
         #self.player_model = KerasDeepPlayer(time_dim=(self.memory_timeframe,),
         #                                    game_frame_dim=self.window_dim)
 
@@ -61,19 +61,18 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         movement_model_file_path = "datasets/ofdp_direction_dqn_0_1_.hp5"
         self.dqn_movement = DDQN(
             model_file_path=movement_model_file_path if os.path.isfile(movement_model_file_path) else None,
-            input_shape=(100, 100, 4),
+            input_shape=(72, 128, 3),
             input_mapping=self.input_mapping,
             action_space=movement_action_space,
             replay_memory_size=5000,
             max_steps=1000000,
-            observe_steps=10,
+            observe_steps=1000,
             batch_size=32,
-            model_learning_rate=1e-4,
+            model_learning_rate=0.001,#1e-4,
             initial_epsilon=1,
-            final_epsilon=0.01,
+            final_epsilon=0.0001,
             override_epsilon=False
         )
-
 
         self.play_history = []
 
@@ -81,7 +80,50 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         self.frame_handler_setups["PLAY"] = self.setup_play
 
+        print("Game agent initializing Redis waiting for frames to flow")
+        self.game_frame_buffer = FrameGrabber.get_frames(
+            [2, 1, 0, 3],
+            # Last frame is the next state while final frame should be first to allow extension of history
+            frame_type="PIPELINE"
+        )
+        print("Game agent redis OK")
+
+        print("Game agent finished initiating")
+
     def setup_play(self):
+        self.game_state = {
+            "health": collections.deque(np.full((8,), 10), maxlen=8),
+            "nb_ennemies_hit": 0,
+            "zoom_level": ZOOM_MAIN,
+            "bonus_mode": False,
+            "bonus_hits": 4,
+            "nb_miss": 0,
+            "miss_failsafe": 2,
+            # DQN variables
+            "current_run": 1,
+            "current_run_started_at": datetime.utcnow(),
+            "current_run_duration": None,
+            "current_run_steps": 0,
+            "run_reward": 0,
+            "run_future_rewards": 0,
+            "run_predicted_actions": 0,
+            "run_timestamp": datetime.utcnow(),
+            "last_run": 0,
+            "last_run_duration": 0,
+            "last_run_duration_actual": None,
+            "last_run_distance": 0.0,
+            "last_run_coins_collected": 0,
+            "record_duration": None,
+            "record_duration_actual": 0,
+            "record_run": 0,
+            "record_distance": 0.0,
+            "alive": collections.deque(np.full((8,), 4), maxlen=8),
+            "record_time_alive": dict(),
+            "random_time_alive": None,
+            "random_time_alives": list(),
+            "random_distance_travelled": 0.0
+        }
+
         self.reset_game_state()
         context_classifier_path = f"{plugin_path}/SerpentDeathFingerOnePunchGameAgentPlugin/files/ml_models/context_classifier.model"
         context_classifier = CNNInceptionV3ContextClassifier(input_shape=self.window_dim)
@@ -89,29 +131,33 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         context_classifier.load_classifier(context_classifier_path)
         self.machine_learning_models["context_classifier"] = context_classifier
 
-        #print("game_frame_buffer:", self.game_frame_buffer)
-
-
     def handle_play(self, game_frame):
         gc.disable()
+        self.context = self.machine_learning_models["context_classifier"].predict(game_frame.frame)
 
-        context = self.machine_learning_models["context_classifier"].predict(game_frame.frame)
-        print(context)
-        if context is None or context == "ofdp_game":
+        #print(self.context)
+        if self.context is None or self.context == "ofdp_game":
             #print("FIGHT!")
             self.game_state["alive"].appendleft(1)
             #print("There's nothing there... Waiting...")
             self.make_a_move()
             return
 
-        self.do_splash_screen_action(context)
-        self.do_main_menu_actions(context)
-        self.do_mode_menu_action(context)
-        self.do_survival_menu_action(context)
-        self.do_survival_pre_game_action(context)
-        self.do_game_paused_action(context)
-        self.do_game_end_highscore_action(context)
-        self.do_game_end_score_action(context)
+        self.do_splash_screen_action(self.context)
+        self.do_main_menu_actions(self.context)
+        self.do_mode_menu_action(self.context)
+        self.do_survival_menu_action(self.context)
+        self.do_survival_pre_game_action(self.context)
+        self.do_game_paused_action(self.context)
+        self.do_game_end_highscore_action(self.context)
+        self.do_game_end_score_action(self.context)
+
+        for i, game_frame in enumerate(self.game_frame_buffer.frames):
+            self.visual_debugger.store_image_data(
+                game_frame.frame,
+                game_frame.frame.shape,
+                str(i)
+            )
 
         ###
         # Old manual code
@@ -133,25 +179,19 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         ###
         # DDQN execution code
         ###
-        if self.dqn_movement.frame_stack is None:
-            game_frame_buffer = FrameGrabber.get_frames(
-                [0, 1, 2, 3],
-                frame_type="PIPELINE"
-            )
-            frame = game_frame_buffer.frames[0].frame
-            print("FRAME BUFFER CONTAINS:")
-            print(frame.shape)
+        self.game_frame_buffer = FrameGrabber.get_frames(
+            [0, 1, 2, 3],
+            frame_type="PIPELINE"
+        )
+        frame = self.game_frame_buffer.frames[0].frame
+        if self.dqn_movement.frame_stack is None or self.dqn_movement.mode == "RUN":
+            #print("FRAME BUFFER CONTAINS:")
+            #print(frame.shape)
             self.dqn_movement.build_frame_stack(frame)
             #self.dqn_movement.build_frame_stack(game_frame.ssim_frame)
         else:
-            game_frame_buffer = FrameGrabber.get_frames(
-                [0, 1, 2, 3],
-                frame_type="PIPELINE"
-                #frame_shape=(100, 100, 4),
-                #pipeline_string="PIPELINE|RESIZE:100,100"
-            )
-            print("FRAME BUFFER CONTAINS:")
-            print(game_frame_buffer.frames[0].frame.shape)
+            #print("FRAME BUFFER CONTAINS:")
+            #print(self.game_frame_buffer.frames[0].frame.shape)
 
             if self.dqn_movement.mode == "TRAIN":
                 reward = self._calculate_reward()
@@ -159,7 +199,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                 self.game_state["run_reward"] += reward
 
                 self.dqn_movement.append_to_replay_memory(
-                    game_frame_buffer,
+                    self.game_frame_buffer,
                     reward,
                     terminal=self.game_state["alive"] == 0
                 )
@@ -176,14 +216,13 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                         is_checkpoint=True
                     )
 
-            elif self.dqn_movement.mode == "RUN":
-                self.dqn_movement.update_frame_stack(self.game_frame_buffer)
-
             run_time = datetime.now() - self.started_at
 
             serpent.utilities.clear_terminal()
             print("\033c" + f"SESSION RUN TIME: {run_time.days} days, {run_time.seconds // 3600} hours, {(run_time.seconds // 60) % 60} minutes, {run_time.seconds % 60} seconds")
             print("")
+
+            print("Reading context:", self.context)
 
             print("MOVEMENT NEURAL NETWORK:\n")
             self.dqn_movement.output_step_data()
@@ -210,7 +249,17 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         keys = self.dqn_movement.get_input_values()
         print("")
-        print(" + ".join(list(map(lambda k: self.key_mapping.get(k.name), keys))))
+        print("Chosen move:", " + ".join(list(map(lambda k: self.key_mapping.get(k.name), keys))))
+
+        print ("")
+        total, available, percent, used, free = psutil.virtual_memory()
+        proc = self.process.memory_info()[1]
+        print('process = %s | total = %s | available = %s | used = %s | free = %s | percent free = %s'
+              % (proc/1000, total/1000, available/1000, used/1000, free/1000, percent))
+
+        print("")
+        print("")
+        print("", self.dqn_movement.replay_memory.tree.)
 
         for key in keys:
             self.input_controller.click(button=key)
@@ -237,42 +286,31 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.username_entered = False
         self.episode_start_time = time.time()
         self.episode_end_time = None
-        self.game_state = {
-            "health": collections.deque(np.full((8,), 10), maxlen=8),
-            "nb_ennemies_hit": 0,
-            "zoom_level": ZOOM_MAIN,
-            "bonus_mode": False,
-            "bonus_hits": 4,
-            "nb_miss": 0,
-            "miss_failsafe": 2,
-            #DQN variables
-            "current_run": 1,
-            "current_run_started_at": datetime.utcnow(),
-            "current_run_duration": None,
-            "current_run_steps": 0,
-            "run_reward": 0,
-            "run_future_rewards": 0,
-            "run_predicted_actions": 0,
-            "run_timestamp": datetime.utcnow(),
-            "last_run": 0,
-            "last_run_duration": 0,
-            "last_run_duration_actual": None,
-            "last_run_distance": 0.0,
-            "last_run_coins_collected": 0,
-            "record_duration": None,
-            "record_duration_actual": 0,
-            "record_run": 0,
-            "record_distance": 0.0,
-            "alive": collections.deque(np.full((8,), 4), maxlen=8),
-            "record_time_alive": dict(),
-            "random_time_alive": None,
-            "random_time_alives": list(),
-            "random_distance_travelled": 0.0
-        }
+        self.game_state["health"] = collections.deque(np.full((8,), 10), maxlen=8)
+        self.game_state["nb_ennemies_hit"] = 0
+        self.game_state["zoom_level"] = ZOOM_MAIN
+        self.game_state["bonus_mode"] = False
+        self.game_state["bonus_hits"] = 4
+        self.game_state["nb_miss"] = 0
+        self.game_state["miss_failsafe"] = 2
+        #DQN variables
+        #self.game_state["current_run"] = 1
+        self.game_state["current_run_started_at"] = datetime.utcnow()
+        self.game_state["current_run_duration"] = None
+        self.game_state["current_run_steps"] = 0
+        self.game_state["run_reward"] = 0
+        self.game_state["run_future_rewards"] = 0
+        self.game_state["run_predicted_actions"] = 0
+        self.game_state["run_timestamp"] = datetime.utcnow()
+        self.game_state["alive"] = collections.deque(np.full((8,), 4), maxlen=8)
+        #self.game_state["random_time_alive"] = None
+        self.game_state["random_distance_travelled"] = 0.0
 
     def train_dqn(self):
         serpent.utilities.clear_terminal()
         timestamp = datetime.utcnow()
+        #print("Timestamp when training starts:", timestamp)
+        #print("Timestamp when round started:", self.game_state["run_timestamp"])
 
         gc.enable()
         gc.collect()
@@ -280,11 +318,12 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         # Set display stuff TODO
         timestamp_delta = timestamp - self.game_state["run_timestamp"]
-        self.game_state["last_run_duration"] = timestamp_delta.seconds
+        #print("Delta timestamp:", timestamp_delta.seconds)
+        self.game_state["last_run_duration"] = int(timestamp_delta.seconds)
 
         if self.dqn_movement.mode in ["TRAIN", "RUN"]:
             # Check for Records
-            if self.game_state["last_run_duration"] > self.game_state["record_time_alive"].get("value", 0): #Unsure about this line TODO verify
+            if self.game_state["last_run_duration"] > self.game_state["record_time_alive"].get("value", 0):
                 self.game_state["record_time_alive"] = {
                     "value": self.game_state["last_run_duration"],
                     "run": self.game_state["current_run"],
@@ -302,6 +341,8 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         if self.dqn_movement.mode == "TRAIN":
             for i in range(8):
                 serpent.utilities.clear_terminal()
+                print(f"")
+                print(f"")
                 print(f"TRAINING ON MINI-BATCHES: {i + 1}/8")
                 print(f"NEXT RUN: {self.game_state['current_run'] + 1} {'- AI RUN' if (self.game_state['current_run'] + 1) % 20 == 0 else ''}")
 
@@ -331,8 +372,11 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
     def _calculate_reward(self):
         reward = 0
 
-        reward += (-0.5 if self.game_state["alive"][0] < self.game_state["alive"][1] else 0.05)
+        reward += (-0.5 if self.game_state["alive"][2] < self.game_state["alive"][3] else 0.05)
         # reward += (0.5 if (self.game_state["coins"][0] - self.game_state["coins"][1]) >= 1 else -0.05)
+
+        if self.context == "ofdp_game_end_highscore":
+            reward += reward*500
 
         return reward
 
@@ -343,7 +387,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             #print("Boring part, just click on \"Play\"")
             self.input_controller.move(x=650, y=460)
             self.input_controller.click()
-            time.sleep(5)
+            time.sleep(60)
 
     def do_main_menu_actions(self, context):
         if context == "ofdp_main_menu":
@@ -352,12 +396,12 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                 button=MouseButton.LEFT,
                 screen_region="MAIN_MENU_CLICK_MOUSE_PLAY"
             )
-            time.sleep(0.5)
+            time.sleep(3)
             self.input_controller.click_screen_region(
                 button=MouseButton.LEFT,
                 screen_region="MAIN_MENU_CLICK_MOUSE_PLAY"
             )
-            time.sleep(1)
+            time.sleep(3)
 
     def do_mode_menu_action(self, context, game_mode="MODE_MENU_SURVIVAL"):
         if context == "ofdp_mode_menu":
@@ -366,7 +410,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                 button=MouseButton.LEFT,
                 screen_region=game_mode
             )
-            time.sleep(1)
+            time.sleep(3)
 
     def do_survival_menu_action(self, context, game_mode="SURVIVAL_MENU_BUTTON_TOP"):
         if context == "ofdp_survival_menu":
@@ -376,7 +420,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                 button=MouseButton.LEFT,
                 screen_region=game_mode
             )
-            time.sleep(1)
+            time.sleep(2)
 
     def do_survival_pre_game_action(self, context):
         if context == "ofdp_survival_pre_game":
@@ -388,7 +432,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                 button=MouseButton.LEFT,
                 screen_region="SURVIVAL_PRE_GAME_START_BUTTON"
             )
-            time.sleep(1)
+            time.sleep(2)
 
 
     def do_game_paused_action(self, context):
@@ -435,7 +479,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                 button=MouseButton.LEFT,
                 screen_region="GAME_OVER_SCORE_BUTTON"
             )
-            time.sleep(1)
+            time.sleep(3)
 
 
     #Util methods I might use
