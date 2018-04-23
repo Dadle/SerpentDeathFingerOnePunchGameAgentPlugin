@@ -233,7 +233,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         if self.new_episode:
             #self.kill_count = 0
 
-            self.self.episode_start_time = datetime.now()
+            self.episode_start_time = datetime.now()
 
             # Create a new motion-tracer for processing images from the
             # game-environment. Initialize with the first image-frame.
@@ -335,13 +335,17 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             print(msg.format(count_episodes, count_states, self.epsilon,
                              self.reward_episode, reward_mean))
 
+        episode_time = datetime.now() - self.episode_start_time
+
         self.printer.add("")
         self.printer.add("Capgemini Intelligent Automation - Death Finger One Punch agent")
         self.printer.add("Reinforcement Learning: Training a DQN Agent")
         self.printer.add("")
         self.printer.add(f"Episode Started At: {self.episode_start_time.strftime('%Y-%m-%d %H:%M')}")
         self.printer.add(f"Episode finished At: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        self.printer.add(f"Episode lasted: {round((datetime.now() - self.started_at).seconds, 0)}")
+        self.printer.add(f"Episode lasted: {episode_time.seconds // 3600} hours, "
+                         f"{(episode_time.seconds // 60) % 60} minutes, "
+                         f"{episode_time.seconds % 60} seconds")
         self.printer.add(f"Completed episodes: {self.model.get_count_episodes()}")
 
         self.printer.add("")
@@ -368,6 +372,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                                    f"{(run_time.seconds // 60) % 60} minutes, "
                                    f"{run_time.seconds % 60} seconds")
         self.printer.add("")
+        self.printer.add(f"CURRENT EPISODE: #{self.model.get_count_episodes()}")
         self.printer.add(f"Episode FPS: {round(episode_time.seconds/len(self.replay_memory.episode_memory.states), 2)}")
         self.printer.add(f"Episode clock time: "
                          f"{episode_time.seconds // 3600} hours, "
@@ -394,7 +399,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                          f"\nAction: {self.replay_memory.episode_memory.actions[-1]}")
 
         self.printer.add("")
-        self.printer.add(f"CURRENT EPISODE: #{self.model.get_count_episodes()}")
 
         if self.replay_memory.num_used > 0:
             self.printer.add("")
