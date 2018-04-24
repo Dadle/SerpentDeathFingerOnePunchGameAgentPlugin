@@ -2018,11 +2018,10 @@ class NeuralNetwork:
             Learning-rate to use for the optimizer.
         """
 
-        print("Optimizing Neural Network to better estimate Q-values ...")
+        print("Optimizing Neural Network to better estimate Q-values:")
         print("\tLearning-rate: {0:.1e}".format(learning_rate))
         print("\tLoss-limit: {0:.3f}".format(loss_limit))
         print("\tMax epochs: {0:.1f}".format(max_epochs))
-        print("")
         print("")
 
         # Prepare the probability distribution for sampling the replay-memory.

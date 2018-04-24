@@ -6,6 +6,7 @@ import gc
 import offshoot
 import pyautogui
 import collections
+import math
 import numpy as np
 import serpent.utilities
 from serpent.frame_grabber import FrameGrabber
@@ -109,13 +110,14 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.machine_learning_models["context_classifier"] = context_classifier
 
         self.setup_ddqn()
-        idx = 50  # np.argmax(self.replay_memory.rewards)
 
-        for i in range(-5, 3):
-            # self.plot_state(idx=idx+i)
-            continue
-        # cv2.imshow("GameState", self.replay_memory.states[-1])
-        # cv2.waitKey(0)
+        #To see the output of convolutional layers, set this to True
+        if False:
+            idx = 50  # np.argmax(self.replay_memory.rewards)
+            self.plot_state(idx=idx)
+            self.plot_layer_output(model=self.model, layer_name='layer_conv1', state_index=idx, inverse_cmap=False)
+            self.plot_layer_output(model=self.model, layer_name='layer_conv2', state_index=idx, inverse_cmap=False)
+            self.plot_layer_output(model=self.model, layer_name='layer_conv3', state_index=idx, inverse_cmap=False)
 
     def setup_ddqn(self):
         dqn.checkpoint_base_dir = "D:\checkpoints"  # 'checkpoints_dqn'
@@ -328,9 +330,9 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add(f"Completed episodes: {self.replay_memory.episode_statistics.num_episodes_completed}")
         self.printer.add("")
 
-        self.printer.add(f"Average survive time Last 10   Runs "
+        self.printer.add(f"Average survive time Last 10   Runs: "
                          f"{round(self.replay_memory.episode_statistics.average_reward_10, 0)}")
-        self.printer.add(f"Average survive time Last 100  Runs "
+        self.printer.add(f"Average survive time Last 100  Runs: "
                          f"{round(self.replay_memory.episode_statistics.average_reward_100, 0)}")
         self.printer.add(f"Average survive time Last 1000 Runs: "
                          f"{round(self.replay_memory.episode_statistics.average_reward_1000, 0)}")
@@ -442,6 +444,63 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                   interpolation='lanczos', cmap='gray')
 
         # This is necessary if we show more than one plot in a single Notebook cell.
+        plt.show()
+
+    def plot_layer_output(self, model, layer_name, state_index, inverse_cmap=False):
+        """
+        Plot the output of a convolutional layer.
+
+        :param model: An instance of the NeuralNetwork-class.
+        :param layer_name: Name of the convolutional layer.
+        :param state_index: Index into the replay-memory for a state that
+                            will be input to the Neural Network.
+        :param inverse_cmap: Boolean whether to inverse the color-map.
+        """
+
+        # Get the given state-array from the replay-memory.
+        state = self.replay_memory.states[state_index]
+
+        # Get the output tensor for the given layer inside the TensorFlow graph.
+        # This is not the value-contents but merely a reference to the tensor.
+        layer_tensor = model.get_layer_tensor(layer_name=layer_name)
+
+        # Get the actual value of the tensor by feeding the state-data
+        # to the TensorFlow graph and calculating the value of the tensor.
+        values = model.get_tensor_value(tensor=layer_tensor, state=state)
+
+        # Number of image channels output by the convolutional layer.
+        num_images = values.shape[3]
+
+        # Number of grid-cells to plot.
+        # Rounded-up, square-root of the number of filters.
+        num_grids = math.ceil(math.sqrt(num_images))
+
+        # Create figure with a grid of sub-plots.
+        fig, axes = plt.subplots(num_grids, num_grids, figsize=(10, 10))
+
+        print("Dim. of each image:", values.shape)
+
+        if inverse_cmap:
+            cmap = 'gray_r'
+        else:
+            cmap = 'gray'
+
+        # Plot the outputs of all the channels in the conv-layer.
+        for i, ax in enumerate(axes.flat):
+            # Only plot the valid image-channels.
+            if i < num_images:
+                # Get the image for the i'th output channel.
+                img = values[0, :, :, i]
+
+                # Plot image.
+                ax.imshow(img, interpolation='nearest', cmap=cmap)
+
+            # Remove ticks from the plot.
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        # Ensure the plot is shown correctly with multiple plots
+        # in a single Notebook cell.
         plt.show()
 
     def reset_game_state(self):
