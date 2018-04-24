@@ -175,6 +175,8 @@ import argparse
 import download
 import datetime
 import collections
+import pickle
+from ..helpers.terminal_printer import TerminalPrinter
 
 ########################################################################
 # File-paths are global variables for convenience so they don't
@@ -185,7 +187,7 @@ import collections
 
 # Default base-directory for the checkpoints and log-files.
 # The environment-name will be appended to this.
-checkpoint_base_dir = 'checkpoints_dqn/'
+checkpoint_base_dir = 'checkpoints'
 
 # Combination of base-dir and environment-name.
 checkpoint_dir = None
@@ -981,7 +983,7 @@ class ReplayMemoryEpisodeTimeRewarded:
     We assume that the first action you do is the best one, and the last action you do is the one that kills you.
     """
 
-    def __init__(self, size, num_actions):
+    def __init__(self, size, num_actions, env_name, discount_factor=0.97):
         """
 
         :param size:
@@ -989,6 +991,9 @@ class ReplayMemoryEpisodeTimeRewarded:
         :param num_actions:
             Number of possible actions in the game-environment.
         """
+
+        # Name of this game agent, only used for checkpointing and naming files on disk
+        self.env_name = env_name
 
         # Object keeping track of statistics across episodes for printing
         self.episode_statistics = self.EpisodeStatistics()
@@ -1024,14 +1029,31 @@ class ReplayMemoryEpisodeTimeRewarded:
         # Capacity of the replay-memory as the number of states.
         self.size = size
 
+        # Discount factor for time based is ionly used to update q_values after the fact, not for reward calculation
+        self.discount_factor = discount_factor
+
         # Reset the number of used states in the replay-memory.
         self.num_used = 0
 
         # Threshold for splitting between low and high estimation errors.
-        self.error_threshold = 0.1
+        self.error_threshold = 0.01
 
         # Initialize a first episode memory
         self.episode_memory = self.EpisodeReplayMemory()
+
+    def store_memory_checkpoint(self):
+        with open(os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + self.env_name + '.pkl'),
+                  'wb') as output:  # Overwrites any existing file.
+            pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
+
+    @staticmethod
+    def load_memory_checkpoint(env_name):
+        try:
+            with open(os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + env_name + '.pkl'),
+                      'rb') as memory_file:
+                return pickle.load(memory_file)
+        except Exception:
+            return None
 
     def is_full(self):
         """Return boolean whether the replay-memory is full."""
@@ -1058,6 +1080,7 @@ class ReplayMemoryEpisodeTimeRewarded:
 
         self.episode_statistics.update_statistics(self.episode_memory, count_episodes)
 
+        # While adding episode to replay memory we need to calculate the rewards
         for index in range(len(self.episode_memory.states)):
             k = self.num_used
 
@@ -1066,6 +1089,7 @@ class ReplayMemoryEpisodeTimeRewarded:
             self.states[k] = self.episode_memory.states[index]
             self.q_values[k] = self.episode_memory.q_values[index]
             self.actions[k] = self.episode_memory.actions[index]
+            self.rewards[k] = self.episode_memory.reward(state_number=index, episode_length=count_episodes)
             # self.end_life[k] = end_life[index]
             self.end_episode[k] = self.episode_memory.end_episode[index]
 
@@ -1123,6 +1147,66 @@ class ReplayMemoryEpisodeTimeRewarded:
 
         self.print_statistics()
 
+    def update_all_q_values_time_rewarded(self):
+        """
+        Update all Q-values in the replay-memory.
+
+        When states and Q-values are added to the replay-memory, the
+        Q-values have been estimated by the Neural Network. But we now
+        have more data available that we can use to improve the estimated
+        Q-values, because we now know which actions were taken and the
+        observed rewards. We sweep backwards through the entire replay-memory
+        to use the observed data to improve the estimated Q-values.
+        """
+
+        # Copy old Q-values so we can print their statistics later.
+        # Note that the contents of the arrays are copied.
+        self.q_values_old[:] = self.q_values[:]
+
+        # Process the replay-memory backwards and update the Q-values.
+        # This loop could be implemented entirely in NumPy for higher speed,
+        # but it is probably only a small fraction of the overall time usage,
+        # and it is much easier to understand when implemented like this.
+        for k in range(self.num_used - 1):
+            # Find next index of episode end
+            # This is used to calculate reward based on how far from the end of the episode we are
+            next_end_episode_idx = -1
+            for i, episode_ended in enumerate(self.end_episode[k:self.num_used-1]):
+                if episode_ended:
+                    next_end_episode_idx = i
+                    break
+
+            # find the last episode end marker
+            # This is used to calculate episode lenght
+            begin_new_episode_idx = -1
+            for i, episode_ended in reversed(enumerate(self.end_episode[k:self.num_used-1])):
+                if episode_ended:
+                    begin_new_episode_idx = i+1
+                    break
+
+            # Get the data for the k'th state in the replay-memory.
+            action = self.actions[k]
+            reward = self.rewards[k]
+            episode_length = next_end_episode_idx - begin_new_episode_idx
+            # end_life = self.end_life[k]
+            # end_episode = self.end_episode[k]
+
+            # Calculate the Q-value for the action that was taken in this state.
+
+            # The reward is just for staying aloive as long as possible.
+            # So as long as the end of the episode is far off we give a higher reward
+            # The closer we get to the end of the episode the more likely it is that a fatal mistake was made
+            discount = 1-1**(next_end_episode_idx-k)
+            action_value = reward + episode_length**(discount) * np.max(self.q_values[k + 1])
+
+            # Error of the Q-value that was estimated using the Neural Network.
+            self.estimation_errors[k] = abs(action_value - self.q_values[k, action])
+
+            # Update the Q-value with the better estimate.
+            self.q_values[k, action] = action_value
+
+        self.print_statistics()
+
     def prepare_sampling_prob(self, batch_size=128):
         """
         Prepare the probability distribution for random sampling of states
@@ -1146,6 +1230,10 @@ class ReplayMemoryEpisodeTimeRewarded:
         # reward that was actually observed when an action was taken.
         err = self.estimation_errors[0:self.num_used]
 
+        # Calculating the error treshold based on the current estimation errors.
+        # We are considering any error above the 75th percentile to be high estimation error
+        #self.error_threshold = np.percentile(err, 75)
+
         # Create an index of the estimation errors that are low.
         idx = err < self.error_threshold
         self.idx_err_lo = np.squeeze(np.where(idx))
@@ -1165,6 +1253,17 @@ class ReplayMemoryEpisodeTimeRewarded:
 
         # Number of samples in a batch that have low estimation errors.
         self.num_samples_err_lo = batch_size - self.num_samples_err_hi
+
+        #print("PREPARING SAMPLING PROBABILITY")
+        #print("ERROR THRESHOLD:", self.error_threshold)
+        #print("ESTIMATION ERRORS:", err)
+        #print("IS BELOW ERR TRESHOLD:", idx)
+        #print("LOW ERROR PROBABILITY:", self.idx_err_lo)
+        #print("HIGH ERROR PROBABILITY:", self.idx_err_hi)
+        #print("PROBABILITY OF HIGH ERROR RESULT:", prob_err_hi)
+        #print("PROBABILITY OF HIGH FINAL:", prob_err_hi)
+        #print("NUMBER OF LOW ERROR SAMPLES:", self.num_samples_err_lo)
+        #print("NUMBER OF HIGH ERROR SAMPLES:", self.num_samples_err_hi)
 
     def random_batch(self):
         """
@@ -1356,7 +1455,6 @@ class ReplayMemoryEpisodeTimeRewarded:
             # Threshold for splitting between low and high estimation errors.
             self.error_threshold = 0.1
 
-
         def reset(self):
             """Reset the replay-memory so it is empty."""
             self.num_used = 0
@@ -1454,7 +1552,19 @@ class ReplayMemoryEpisodeTimeRewarded:
             return self.states, self.q_values, self.actions, self.rewards, self.end_episode
 
         @staticmethod
-        def reward(self, state_number, episode_length):
+        def reward(state_number, episode_length):
+            """
+                        When the episode ends we know the final score and can run the
+                        episode again to calculate the reward per state
+
+                        :param: state_number:
+                            Index of the state for the episode
+                        :param: episode_length:
+                            number of states in the episode
+                        :return: reward:
+                            Reward for the state given as state_number in this episode
+                        """
+            # print(f"CALCULATED REWARD: {(1 - (1 / episode_length)) ** state_number}")
             return (1 - (1 / episode_length)) ** state_number
 
         def print_episode_statistics(self):
@@ -1878,8 +1988,8 @@ class NeuralNetwork:
         return values
 
     def optimize(self, min_epochs=1.0, max_epochs=10,
-                 batch_size=128, loss_limit=0.015,
-                 learning_rate=1e-3):
+                 batch_size=128, loss_limit=0.0015,
+                 learning_rate=1e-7):
         """
         Optimize the Neural Network by sampling states and Q-values
         from the replay-memory.
@@ -1912,6 +2022,8 @@ class NeuralNetwork:
         print("\tLearning-rate: {0:.1e}".format(learning_rate))
         print("\tLoss-limit: {0:.3f}".format(loss_limit))
         print("\tMax epochs: {0:.1f}".format(max_epochs))
+        print("")
+        print("")
 
         # Prepare the probability distribution for sampling the replay-memory.
         self.replay_memory.prepare_sampling_prob(batch_size=batch_size)
@@ -1954,9 +2066,11 @@ class NeuralNetwork:
 
             # Print status.
             pct_epoch = i / iterations_per_epoch
-            msg = "\rIteration: {0} ({1:.2f} epoch), Batch loss: {2:.4f}, Mean loss: {3:.4f}",
+            msg = "\rIteration: {0} ({1:.1f} epoch), Batch loss: {2:.2f}, Mean loss: {3:.2f}"
             msg = msg.format(i, pct_epoch, loss_val, loss_mean)
-            print_progress(msg)
+            print(msg,
+                end="", flush=True)
+            #print(f"\rIteration: {i} ({round(pct_epoch,2)} epoch), Batch loss: {round(loss_val,2)}, Mean loss: {round(loss_mean,2)}\r", end="", flush=True)
 
             # Stop the optimization if we have performed the required number
             # of iterations and the loss-value is sufficiently low.
@@ -2061,12 +2175,14 @@ class Agent:
     instances of the Replay Memory and Neural Network.
     """
 
-    def __init__(self, action_list, training, render=False, use_logging=True):
+    def __init__(self, action_list, env_name, training, render=False, use_logging=True):
         """
         Create an object-instance. This also creates a new object for the
         Replay Memory and the Neural Network.
 
         Replay Memory will only be allocated if training==True.
+        :param action_list:
+            List of actions the agent is allowed to choose from
         :param env_name:
             Name of the game-environment in OpenAI Gym.
             Examples: 'Breakout-v0' and 'SpaceInvaders-v0'
@@ -2079,6 +2195,9 @@ class Agent:
         :param use_logging:
             Boolean whether to use logging to text-files during training.
         """
+
+        # Name of the environment. Only used for locating checkpoint files
+        self.env_name = env_name
 
         # The number of possible actions that the agent may take in every step.
         self.num_actions = len(action_list)
@@ -2116,8 +2235,8 @@ class Agent:
             # The following control-signals are only used during training.
 
             # The learning-rate for the optimizer decreases linearly.
-            self.learning_rate_control = LinearControlSignal(start_value=1e-3,
-                                                             end_value=1e-5,
+            self.learning_rate_control = LinearControlSignal(start_value=1e-5,
+                                                             end_value=1e-8,
                                                              num_iterations=5e6)
 
             # The loss-limit is used to abort the optimization whenever the
@@ -2162,8 +2281,21 @@ class Agent:
             # Each pixel is 1 byte, so this replay-memory needs more than
             # 3 GB RAM (105 x 80 x 2 x 200000 bytes).
 
-            self.replay_memory = ReplayMemoryEpisodeTimeRewarded(size=200000,
-                                                                 num_actions=self.num_actions)
+            print("***************************************************************")
+            print("Trying to load replay memory from checkpoint...")
+            self.replay_memory = ReplayMemoryEpisodeTimeRewarded.load_memory_checkpoint(self.env_name)
+
+            if self.replay_memory is not None:
+                print("***************************************************************")
+                print("Loaded replay memory for agent", self.env_name, "from checkpoint file")
+                print("***************************************************************")
+            else:
+                print("***************************************************************")
+                print("Unable to load existing replay memory, creating a new one")
+                print("***************************************************************")
+                self.replay_memory = ReplayMemoryEpisodeTimeRewarded(size=200000,
+                                                                     num_actions=self.num_actions,
+                                                                     env_name=self.env_name)
         else:
             self.replay_memory = None
 
@@ -2288,7 +2420,7 @@ class Agent:
                     or self.replay_memory.used_fraction() > use_fraction:
 
                 # Update all Q-values in the replay-memory through a backwards-sweep.
-                self.replay_memory.update_all_q_values()
+                self.replay_memory.update_all_q_values_time_rewarded()
 
                 # Log statistics for the Q-values to file.
                 if self.use_logging:

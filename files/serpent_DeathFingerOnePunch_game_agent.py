@@ -16,9 +16,10 @@ from serpent.machine_learning.context_classification.context_classifiers.cnn_inc
 from serpent.machine_learning.reinforcement_learning.ddqn import DDQN
 from serpent.machine_learning.reinforcement_learning.keyboard_mouse_action_space import KeyboardMouseActionSpace
 from .helpers.terminal_printer import TerminalPrinter
-from serpent import ocr
 
 from plugins.SerpentDeathFingerOnePunchGameAgentPlugin.files.ddqn import dqn_core as dqn
+import cv2
+import matplotlib.pyplot as plt
 
 plugin_path = offshoot.config["file_paths"]["plugins"]
 
@@ -30,11 +31,8 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         self.process = psutil.Process(os.getpid())
 
+        self.env_name = 'DeathFingerOnePunch'
         self.window_dim = (self.game.window_geometry['height'], self.game.window_geometry['width'], 3)
-        self.memory_timeframe = 6  #at 2 FPS means 3 seconds of history
-
-        #self.player_model = KerasDeepPlayer(time_dim=(self.memory_timeframe,),
-        #                                    game_frame_dim=self.window_dim)
 
         self.printer = TerminalPrinter()
 
@@ -55,51 +53,10 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             2: "LEFT"
         }
 
-        # Complete action meaning from OpenAI gym
-        self.ACTION_MEANING_GYM = {
-            0: "NOOP",
-            1: "FIRE",
-            2: "UP",
-            3: "RIGHT",
-            4: "LEFT",
-            5: "DOWN",
-            6: "UPRIGHT",
-            7: "UPLEFT",
-            8: "DOWNRIGHT",
-            9: "DOWNLEFT",
-            10: "UPFIRE",
-            11: "RIGHTFIRE",
-            12: "LEFTFIRE",
-            13: "DOWNFIRE",
-            14: "UPRIGHTFIRE",
-            15: "UPLEFTFIRE",
-            16: "DOWNRIGHTFIRE",
-            17: "DOWNLEFTFIRE",
-        }
-
         self.key_mapping = {
             MouseButton.LEFT.name: "LEFT",
             MouseButton.RIGHT.name: "RIGHT"
         }
-        movement_action_space = KeyboardMouseActionSpace(
-            default_keys=[None, "LEFT", "RIGHT"]
-        )
-
-        movement_model_file_path = "datasets/ofdp_direction_dqn_0_1_.hp5"
-        self.dqn_movement = DDQN(
-            model_file_path=movement_model_file_path if os.path.isfile(movement_model_file_path) else None,
-            input_shape=(72, 128, 3),
-            input_mapping=self.input_mapping,
-            action_space=movement_action_space,
-            replay_memory_size=5000,
-            max_steps=1000000,
-            observe_steps=1000,
-            batch_size=32,
-            model_learning_rate=0.001,#1e-4,
-            initial_epsilon=1,
-            final_epsilon=0.0001,
-            override_epsilon=False
-        )
 
         self.play_history = []
 
@@ -113,7 +70,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
     def setup_play(self):
         self.kill_count = 0
-        self.reward_episode = -2.0
         self.epsilon = 1.0
         self.game_state = {
             "health": collections.deque(np.full((8,), 10), maxlen=8),
@@ -153,17 +109,24 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.machine_learning_models["context_classifier"] = context_classifier
 
         self.setup_ddqn()
+        idx = 50  # np.argmax(self.replay_memory.rewards)
+
+        for i in range(-5, 3):
+            # self.plot_state(idx=idx+i)
+            continue
+        # cv2.imshow("GameState", self.replay_memory.states[-1])
+        # cv2.waitKey(0)
 
     def setup_ddqn(self):
-        env_name = 'ofdp'
-        dqn.checkpoint_base_dir = 'checkpoints_tutorial16/'
-        dqn.update_paths(env_name=env_name)
+        dqn.checkpoint_base_dir = "D:\checkpoints"  # 'checkpoints_dqn'
+        dqn.update_paths(env_name=self.env_name)
 
         # Setup DQN network and load from checkpoint if available
         self.agent = dqn.Agent(action_list=self.ACTION_MEANING_OFDP,
-                                 training=True,
-                                 render=True,
-                                 use_logging=False)
+                               env_name=self.env_name,
+                               training=True,
+                               render=True,
+                               use_logging=False)
 
         # Direct reference to the ANN in our agent for convenience
         self.model = self.agent.model
@@ -174,14 +137,11 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.episode_start_time = datetime.now()
 
     def handle_play(self, game_frame):
-        #gc.disable()
         self.context = self.machine_learning_models["context_classifier"].predict(game_frame.frame)
 
         #print(self.context)
         if self.context is None or self.context == "ofdp_game":
-            #print("FIGHT!")
             self.game_state["alive"].appendleft(1)
-            #print("There's nothing there... Waiting...")
             self.make_a_move(game_frame)
             return
 
@@ -193,32 +153,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.do_game_paused_action(self.context)
         self.do_game_end_highscore_action(self.context)
         self.do_game_end_score_action(self.context)
-
-        for i, game_frame in enumerate(self.game_frame_buffer.frames):
-            self.visual_debugger.store_image_data(
-                game_frame.frame,
-                game_frame.frame.shape,
-                str(i)
-            )
-
-    # Does not work unfortunately. Transform just hangs
-    def _ocr_update_kill_count(self, game_frame):
-        kill_count_region = serpent.cv.extract_region_from_image(
-            game_frame.grayscale_frame,
-            self.game.screen_regions["KILL_COUNT"]
-        )
-
-        print("Kill count region extracted:", kill_count_region.shape)
-
-        kill_count_observed = ocr.perform_ocr(kill_count_region)
-
-        print("Read kill count:", kill_count_observed)
-
-        if kill_count_observed != "":
-            if kill_count_observed > self.kill_count and kill_count_observed < self.kill_count + 5:
-                self.kill_count = kill_count_observed
-
-        print("Current number of kills:", self.kill_count)
 
     def make_a_move(self, game_frame):
         """
@@ -271,11 +205,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                                                          iteration=count_states,
                                                          training=self.agent.training)
 
-        # Take a step in the game-environment using the given action.
-        # Note that in OpenAI Gym, the step-function actually repeats the
-        # action between 2 and 4 time-steps for Atari games, with the number
-        # chosen at random.
-
         # For SerpentAI we need to select the corresponding key input mapping taken by the input_controller object
         # action is just the index of the move, first get the text meaning of the move, then the key object
         action_meaning = self.ACTION_MEANING_OFDP[action]
@@ -296,15 +225,16 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         # Add the state of the game-environment to the replay-memory.
         self.replay_memory.episode_memory.add(state=state,
-                               q_values=q_values,
-                               action=action,
-                               end_episode=False)
+                                              q_values=q_values,
+                                              action=action,
+                                              end_episode=False)
 
         self.print_statistics()
 
     def end_episde(self):
         # Add the episode's reward to a list and calculate statistics.
-        self.replay_memory.add_episode_too_memory(self.model.count_episodes)
+        # states, q_values, actions, rewards, end_episode = self.replay_memory.episode_memory.episode_end()
+        self.replay_memory.add_episode_too_memory(self.model.get_count_episodes())
         self.agent.episode_rewards.append(self.replay_memory.rewards[-1])
 
         # Counter for the number of states we have processed.
@@ -327,41 +257,64 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             if self.agent.use_logging:
                 self.agent.log_reward.write(count_episodes=count_episodes,
                                       count_states=count_states,
-                                      reward_episode=self.reward_episode,
+                                      reward_episode=self.replay_memory.episode_statistics.last_episode_time,
                                       reward_mean=reward_mean)
 
             # Print reward to screen.
             msg = "{0:4}:{1}\t Epsilon: {2:4.2f}\t Reward: {3:.1f}\t Episode Mean: {4:.1f}"
             print(msg.format(count_episodes, count_states, self.epsilon,
-                             self.reward_episode, reward_mean))
+                             self.replay_memory.episode_statistics.last_episode_time, reward_mean))
 
-        episode_time = datetime.now() - self.episode_start_time
+        #run_time = datetime.now() - self.started_at
+        #episode_states = len(self.replay_memory.episode_memory.states) / 2  # FPS, TODO want to set dynamically
+        #episode_hours = episode_states // 3600
+        #episode_minutes = (episode_states // 60) % 60
+        #episode_seconds = episode_states % 60
 
-        self.printer.add("")
-        self.printer.add("Capgemini Intelligent Automation - Death Finger One Punch agent")
-        self.printer.add("Reinforcement Learning: Training a DQN Agent")
-        self.printer.add("")
-        self.printer.add(f"Episode Started At: {self.episode_start_time.strftime('%Y-%m-%d %H:%M')}")
-        self.printer.add(f"Episode finished At: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        self.printer.add(f"Episode lasted: {episode_time.seconds // 3600} hours, "
-                         f"{(episode_time.seconds // 60) % 60} minutes, "
-                         f"{episode_time.seconds % 60} seconds")
-        self.printer.add(f"Completed episodes: {self.model.get_count_episodes()}")
+        #self.printer.add("")
+        #self.printer.add("Capgemini Intelligent Automation - Death Finger One Punch agent")
+        #self.printer.add("Reinforcement Learning: Training a DQN Agent")
+        #self.printer.add("")
+        #self.printer.add("\033c" + f"SESSION RUN TIME: "
+        #                           f"{run_time.days} days, "
+        #                           f"{run_time.seconds // 3600} hours, "
+        #                           f"{episode_minutes} minutes, "
+        #                           f"{run_time.seconds % 60} seconds")
+        #self.printer.add(f"Episode lasted: {episode_hours} hours, "
+        #                 f"{episode_minutes} minutes, "
+        #                 f"{episode_seconds} seconds")
 
+
+        self.add_printer_head()
+
+        #self.printer.add(f"")
+        #self.printer.add(f"Max q_value: {self.replay_memory.q_values.max(axis=1)}")
+        #self.printer.add(f"Max reward: {self.replay_memory.rewards.max()}")
+        #self.printer.add(f"Min q_value: {self.replay_memory.q_values.min(axis=1)}")
+        #self.printer.add(f"Min reward: {self.replay_memory.rewards.min()}")
+        #self.printer.add(f"Updated episode reward: {self.agent.episode_rewards}")
+
+        self.printer.add(f"Replay memory is {round(self.replay_memory.used_fraction() * 100, 2)}% full")
+        self.printer.add(f"Model trains when replay memory is more than "
+                         f"{int(self.agent.replay_fraction.get_value(iteration=count_states) * 100)}% full")
         self.printer.add("")
 
         self.printer.flush()
+
+        if self.replay_memory.episode_statistics.num_episodes_completed % 10 == 0 and self.replay_memory.episode_statistics.num_episodes_completed > 0:
+            print("Saving replay memory checkpoint, please give me a minute...")
+            self.replay_memory.store_memory_checkpoint()
+            print("Finished storing replay memory for agent", self.env_name)
 
         # Train dqn at end of each episode
         self.train_dqn()
         self.reset_game_state()
 
-    def print_statistics(self):
+    def add_printer_head(self):
         run_time = datetime.now() - self.started_at
-        episode_time = datetime.now() - self.episode_start_time
-        #serpent.utilities.clear_terminal()
+        # serpent.utilities.clear_terminal()
 
-        self.printer.add("")
+        #self.printer.add("")
         self.printer.add("Capgemini Intelligent Automation - Death Finger One Punch agent")
         self.printer.add("Reinforcement Learning: Training a DQN Agent")
         self.printer.add("")
@@ -372,43 +325,52 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                                    f"{(run_time.seconds // 60) % 60} minutes, "
                                    f"{run_time.seconds % 60} seconds")
         self.printer.add("")
-        self.printer.add(f"CURRENT EPISODE: #{self.model.get_count_episodes()}")
-        self.printer.add(f"Episode FPS: {round(episode_time.seconds/len(self.replay_memory.episode_memory.states), 2)}")
+        self.printer.add(f"Completed episodes: {self.replay_memory.episode_statistics.num_episodes_completed}")
+        self.printer.add("")
+
+        self.printer.add(f"Average survive time Last 10   Runs "
+                         f"{round(self.replay_memory.episode_statistics.average_reward_10, 0)}")
+        self.printer.add(f"Average survive time Last 100  Runs "
+                         f"{round(self.replay_memory.episode_statistics.average_reward_100, 0)}")
+        self.printer.add(f"Average survive time Last 1000 Runs: "
+                         f"{round(self.replay_memory.episode_statistics.average_reward_1000, 0)}")
+        #self.printer.add(f"Last episode reward: {self.agent.replay_memory.rewards[-1]}")
+        self.printer.add("")
+
+    def print_statistics(self):
+        episode_time = datetime.now() - self.episode_start_time
+        effective_fps = 0 if episode_time.seconds == 0 else round(
+            len(self.replay_memory.episode_memory.states) / episode_time.seconds, 2)
+        self.add_printer_head()
+
+        #self.printer.add(f"Reading context: {self.context}")
+
+        self.printer.add(f"AGENT DEATH FINGER ONE PUNCH THINKS:")
+        self.printer.add(f"Moves made this episode: {len(self.replay_memory.episode_memory.states)} "
+                         f"\nAction: {self.ACTION_MEANING_OFDP[self.replay_memory.episode_memory.actions[-1]]}"
+                         f"\nQ_values: {self.replay_memory.episode_memory.q_values[-1]} "
+                         f"\nQ_values represent: [NO OPERATION (NOOP), LEFT, RIGHT]"
+                         f"\nQ_value is how good I think each move is right now")
+
+        self.printer.add("")
+
+
+        # TEMP PRINT FOR DEBUGGING
+        self.printer.add(f"Effective FPS: {effective_fps}")
         self.printer.add(f"Episode clock time: "
                          f"{episode_time.seconds // 3600} hours, "
                          f"{(episode_time.seconds // 60) % 60} minutes, "
                          f"{episode_time.seconds % 60} seconds")
-        self.printer.add(f"Episode states processed: {len(self.replay_memory.episode_memory.states)}")
-        self.printer.add("")
-
-        self.printer.add(f"Average Rewards (Last 10 Runs): "
-                         f"{round(self.replay_memory.episode_statistics.average_reward_10, 2)}")
-        self.printer.add(f"Average Rewards (Last 100 Runs): "
-                         f"{round(self.replay_memory.episode_statistics.average_reward_100, 2)}")
-        self.printer.add(f"Average Rewards (Last 1000 Runs): "
-                         f"{round(self.replay_memory.episode_statistics.average_reward_1000, 2)}")
-
-        self.printer.add("")
-
-        #self.printer.add(f"Reading context: {self.context}")
-
-        self.printer.add(f"NEURAL NETWORK MOVE: "
-                         f"{self.ACTION_MEANING_OFDP[self.replay_memory.episode_memory.actions[-1]]}")
-        self.printer.add(f"States processed: {len(self.replay_memory.episode_memory.states)} "
-                         f"\nq_values: {self.replay_memory.episode_memory.q_values[-1]} "
-                         f"\nAction: {self.replay_memory.episode_memory.actions[-1]}")
-
-        self.printer.add("")
+        self.printer.add(f"States processed this episode: {len(self.replay_memory.episode_memory.states)}")
 
         if self.replay_memory.num_used > 0:
             self.printer.add("")
-            self.printer.add(f"CURR RUN TIME ALIVE: {len(self.replay_memory.episode_memory.states)/2} seconds")
-            self.printer.add(f"LAST RUN TIME ALIVE: {self.replay_memory.episode_statistics.last_episode_time} seconds")
+            self.printer.add(f"CURR EPISODE TIME ALIVE: {len(self.replay_memory.episode_memory.states)/2} seconds")
+            self.printer.add(f"LAST EPISODE TIME ALIVE: {self.replay_memory.episode_statistics.last_episode_time} seconds")
 
-        self.printer.add("")
         self.printer.add(f"RECORD TIME ALIVE: "
                          f"{self.replay_memory.episode_statistics.record_episode_length} seconds "
-                         f"(Run {self.replay_memory.episode_statistics.record_episode}")
+                         f"(Run {self.replay_memory.episode_statistics.record_episode})")
                          #f"(Run {self.game_state['record_time_alive'].get('run')} "
                          #f"{'Predicted' if self.game_state['record_time_alive'].get('predicted') else 'Training'})")
 
@@ -425,7 +387,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         count_episodes = self.model.get_count_episodes()
 
         # How much of the replay-memory should be used.
-        use_fraction = self.agent.replay_fraction.get_value(iteration=count_states)
+        use_fraction = 0.1  # self.agent.replay_fraction.get_value(iteration=count_states)
 
         # When the replay-memory is sufficiently full.
         if self.replay_memory.is_full() \
@@ -460,114 +422,31 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             # just gathered, so we will have to fill the replay-memory again.
             #self.replay_memory.reset()
 
+    def plot_state(self, idx):
+        """Plot the state in the replay-memory with the given index."""
 
-    def old_DDQN_code(self):
-        ###
-        # ddqn execution code
-        ###
-        self.game_frame_buffer = FrameGrabber.get_frames(
-            [0, 1, 2, 3],
-            frame_type="PIPELINE"
-        )
-        frame = self.game_frame_buffer.frames[0].frame
-        if self.dqn_movement.frame_stack is None or self.dqn_movement.mode == "RUN":
-            #print("FRAME BUFFER CONTAINS:")
-            #print(frame.shape)
-            self.dqn_movement.build_frame_stack(frame)
-            #self.dqn_movement.build_frame_stack(game_frame.ssim_frame)
-        else:
-            #print("FRAME BUFFER CONTAINS:")
-            #print(self.game_frame_buffer.frames[0].frame.shape)
+        # Get the state from the replay-memory.
+        state = self.replay_memory.states[idx]
 
-            if self.dqn_movement.mode == "TRAIN":
-                reward = self._calculate_reward()
+        # Create figure with a grid of sub-plots.
+        fig, axes = plt.subplots(1, 2)
 
-                self.game_state["run_reward"] += reward
+        # Plot the image from the game-environment.
+        ax = axes.flat[0]
+        ax.imshow(state[:, :, 0], vmin=0, vmax=255,
+                  interpolation='lanczos', cmap='gray')
 
-                self.dqn_movement.append_to_replay_memory(
-                    self.game_frame_buffer,
-                    reward,
-                    terminal=self.game_state["alive"] == 0
-                )
-                # Every 2000 steps, save latest weights to disk
-                if self.dqn_movement.current_step % 2000 == 0:
-                    self.dqn_movement.save_model_weights(
-                        file_path_prefix=f"datasets/dqn_movement"
-                    )
+        # Plot the motion-trace.
+        ax = axes.flat[1]
+        ax.imshow(state[:, :, 1], vmin=0, vmax=255,
+                  interpolation='lanczos', cmap='gray')
 
-                # Every 20000 steps, save weights checkpoint to disk
-                if self.dqn_movement.current_step % 20000 == 0:
-                    self.dqn_movement.save_model_weights(
-                        file_path_prefix=f"datasets/dqn_movement",
-                        is_checkpoint=True
-                    )
-
-            run_time = datetime.now() - self.started_at
-
-            serpent.utilities.clear_terminal()
-            print("\033c" + f"SESSION RUN TIME: {run_time.days} days, {run_time.seconds // 3600} hours, {(run_time.seconds // 60) % 60} minutes, {run_time.seconds % 60} seconds")
-            print("")
-
-            print("Reading context:", self.context)
-
-            print("MOVEMENT NEURAL NETWORK:\n")
-            self.dqn_movement.output_step_data()
-
-            print("")
-            print(f"CURRENT RUN: {self.game_state['current_run']}")
-            print(f"CURRENT RUN REWARD: {round(self.game_state['run_reward'], 2)}")
-            print(f"CURRENT RUN PREDICTED ACTIONS: {self.game_state['run_predicted_actions']}")
-            print(f"CURRENT PLAYER ALIVE: {self.game_state['alive'][0]}")
-
-            print("")
-            # print(f"AVERAGE ACTIONS PER SECOND: {round(self.game_state['average_aps'], 2)}")
-            print("")
-            print(f"LAST RUN DURATION: {self.game_state['last_run_duration']} seconds")
-            # print(f"LAST RUN COINS: {self.game_state['last_run_coins'][0]})
-
-            print("")
-            print(f"RECORD TIME ALIVE: {self.game_state['record_time_alive'].get('value')} seconds (Run {self.game_state['record_time_alive'].get('run')}, {'Predicted' if self.game_state['record_time_alive'].get('predicted') else 'Training'})")
-            print("")
-            print(f"RANDOM AVERAGE TIME ALIVE: {self.game_state['random_time_alive']} seconds")
-
-        self.dqn_movement.pick_action()
-        self.dqn_movement.generate_action()
-
-        keys = self.dqn_movement.get_input_values()
-        print("")
-        print("Chosen move:", " + ".join(list(map(lambda k: self.key_mapping.get(k.name), keys))))
-
-        print ("")
-        total, available, percent, used, free = psutil.virtual_memory()
-        proc = self.process.memory_info()[1]
-        print('process = %s | total = %s | available = %s | used = %s | free = %s | percent free = %s'
-              % (proc/1000, total/1000, available/1000, used/1000, free/1000, percent))
-
-
-        for key in keys:
-            self.input_controller.click(button=key)
-
-        if self.dqn_movement.current_action_type == "PREDICTED":
-            self.game_state["run_predicted_actions"] += 1
-
-        self.dqn_movement.erode_epsilon(factor=2)
-
-        self.dqn_movement.next_step()
-
-        self.game_state["current_run_steps"] += 1
-
-
-
-    def train_player_model(self):
-        episode = []
-        for sequence in self.play_history:
-            score_per_timestep = self.player_model.evaluate_move(sequence['moves'], sequence['frames'], sequence['sequence_end_time'], self.episode_start_time, self.episode_end_time)
-            episode.append({'frames': sequence['frames'], 'scores': score_per_timestep, 'sequence_end_time': sequence['sequence_end_time']})
-        self.player_model.train_episode(episode, self.episode_start_time, self.episode_end_time)
+        # This is necessary if we show more than one plot in a single Notebook cell.
+        plt.show()
 
     def reset_game_state(self):
         self.username_entered = False
-        self.episode_start_time = time.time()
+        self.episode_start_time = datetime.now()
         self.episode_end_time = None
         self.game_state["health"] = collections.deque(np.full((8,), 10), maxlen=8)
         self.game_state["nb_ennemies_hit"] = 0
@@ -585,80 +464,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.game_state["alive"] = collections.deque(np.full((8,), 4), maxlen=8)
         #self.game_state["random_time_alive"] = None
         self.game_state["random_distance_travelled"] = 0.0
-
-    def train_ddqn(self):
-        serpent.utilities.clear_terminal()
-        timestamp = datetime.utcnow()
-        #print("Timestamp when training starts:", timestamp)
-        #print("Timestamp when round started:", self.game_state["run_timestamp"])
-
-        gc.enable()
-        gc.collect()
-        gc.disable()
-
-        # Set display stuff TODO
-        timestamp_delta = timestamp - self.game_state["run_timestamp"]
-        #print("Delta timestamp:", timestamp_delta.seconds)
-        self.game_state["last_run_duration"] = int(timestamp_delta.seconds)
-
-        if self.dqn_movement.mode in ["TRAIN", "RUN"]:
-            # Check for Records
-            if self.game_state["last_run_duration"] > self.game_state["record_time_alive"].get("value", 0):
-                self.game_state["record_time_alive"] = {
-                    "value": self.game_state["last_run_duration"],
-                    "run": self.game_state["current_run"],
-                    "predicted": self.dqn_movement.mode == "RUN"
-                }
-
-        else:
-            self.game_state["random_time_alives"].append(self.game_state["last_run_duration"])
-            self.game_state["random_time_alive"] = np.mean(self.game_state["random_time_alives"])
-
-        self.game_state["current_run_steps"] = 0
-
-        #self.input_controller.release_key(KeyboardKey.KEY_SPACE) #TODO verify or delete
-
-        if self.dqn_movement.mode == "TRAIN":
-            for i in range(8):
-                serpent.utilities.clear_terminal()
-                print(f"")
-                print(f"")
-                print(f"TRAINING ON MINI-BATCHES: {i + 1}/8")
-                print(f"NEXT RUN: {self.game_state['current_run'] + 1} {'- AI RUN' if (self.game_state['current_run'] + 1) % 20 == 0 else ''}")
-
-                self.dqn_movement.train_on_mini_batch()
-
-        self.game_state["run_timestamp"] = datetime.utcnow()
-        self.game_state["current_run"] += 1
-        self.game_state["run_reward_movement"] = 0
-        self.game_state["run_predicted_actions"] = 0
-        self.game_state["alive"] = collections.deque(np.full((8,), 4), maxlen=8)
-
-        if self.dqn_movement.mode in ["TRAIN", "RUN"]:
-            if self.game_state["current_run"] > 0 and self.game_state["current_run"] % 100 == 0:
-                if self.dqn_movement.type == "ddqn":
-                    self.dqn_movement.update_target_model()
-
-            if self.game_state["current_run"] > 0 and self.game_state["current_run"] % 20 == 0:
-                self.dqn_movement.enter_run_mode()
-            else:
-                self.dqn_movement.enter_train_mode()
-
-        #self.input_controller.tap_key(KeyboardKey.KEY_SPACE) #TODO verify or delete
-        time.sleep(5)
-
-        return None
-
-    def _calculate_reward(self):
-        reward = 0
-
-        reward += (-0.5 if self.game_state["alive"][2] < self.game_state["alive"][3] else 0.05)
-        # reward += (0.5 if (self.game_state["coins"][0] - self.game_state["coins"][1]) >= 1 else -0.05)
-
-        if self.context == "ofdp_game_end_highscore":
-            reward += reward*500
-
-        return reward
 
 
     #Context actions to get into the game
