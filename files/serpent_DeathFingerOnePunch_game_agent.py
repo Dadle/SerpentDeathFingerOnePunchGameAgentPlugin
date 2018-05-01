@@ -303,13 +303,14 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         self.printer.flush()
 
-        if self.replay_memory.episode_statistics.num_episodes_completed % 10 == 0 and self.replay_memory.episode_statistics.num_episodes_completed > 0:
+        if self.replay_memory.episode_statistics.num_episodes_completed % 20 == 0 and self.replay_memory.episode_statistics.num_episodes_completed > 0:
             print("Saving replay memory checkpoint, please give me a minute...")
             self.replay_memory.store_memory_checkpoint()
             print("Finished storing replay memory for agent", self.env_name)
 
-        # Train dqn at end of each episode
-        self.train_dqn()
+            # Train dqn at end of every few episodes
+            self.train_dqn()
+
         self.reset_game_state()
 
     def add_printer_head(self):
@@ -331,11 +332,11 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add("")
 
         self.printer.add(f"Average survive time Last 10   Runs: "
-                         f"{round(self.replay_memory.episode_statistics.average_reward_10, 0)}")
+                         f"{round(self.replay_memory.episode_statistics.average_reward_10, 2)}")
         self.printer.add(f"Average survive time Last 100  Runs: "
-                         f"{round(self.replay_memory.episode_statistics.average_reward_100, 0)}")
+                         f"{round(self.replay_memory.episode_statistics.average_reward_100, 2)}")
         self.printer.add(f"Average survive time Last 1000 Runs: "
-                         f"{round(self.replay_memory.episode_statistics.average_reward_1000, 0)}")
+                         f"{round(self.replay_memory.episode_statistics.average_reward_1000, 2)}")
         #self.printer.add(f"Last episode reward: {self.agent.replay_memory.rewards[-1]}")
         self.printer.add("")
 

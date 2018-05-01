@@ -1082,16 +1082,31 @@ class ReplayMemoryEpisodeTimeRewarded:
 
         # While adding episode to replay memory we need to calculate the rewards
         for index in range(len(self.episode_memory.states)):
-            k = self.num_used
+            if self.num_used >= self.size:
+                # If replay memory is full, remove the oldest memory and add the newest one at the end
+                #print("shape of memory after pop", self.states[1:].shape)
+                #print("shape of episode state", np.array([self.episode_memory.states[index]]).shape)
+                self.states = np.concatenate([self.states[1:], [self.episode_memory.states[index]]])
+                self.q_values = np.concatenate([self.q_values[1:], [self.episode_memory.q_values[index]]])
+                self.actions = np.concatenate([self.actions[1:], [self.episode_memory.actions[index]]])
+                self.rewards = np.concatenate([self.rewards[1:],
+                                              [self.episode_memory.reward(state_number=index,
+                                                                          episode_length=count_episodes)]])
+                # self.end_life[k] = end_life[index]
+                self.end_episode = np.concatenate([self.end_episode[1:], [self.episode_memory.end_episode[index]]])
+                break
+            else:
+                # If there is still room in replay memory, add the episode at the end of the currently used memory
+                k = self.num_used
 
-            # Increase the number of used elements in the replay-memory.
-            self.num_used += 1
-            self.states[k] = self.episode_memory.states[index]
-            self.q_values[k] = self.episode_memory.q_values[index]
-            self.actions[k] = self.episode_memory.actions[index]
-            self.rewards[k] = self.episode_memory.reward(state_number=index, episode_length=count_episodes)
-            # self.end_life[k] = end_life[index]
-            self.end_episode[k] = self.episode_memory.end_episode[index]
+                # Increase the number of used elements in the replay-memory.
+                self.num_used += 1
+                self.states[k] = self.episode_memory.states[index]
+                self.q_values[k] = self.episode_memory.q_values[index]
+                self.actions[k] = self.episode_memory.actions[index]
+                self.rewards[k] = self.episode_memory.reward(state_number=index, episode_length=count_episodes)
+                # self.end_life[k] = end_life[index]
+                self.end_episode[k] = self.episode_memory.end_episode[index]
 
         self.reset_episode()
 
@@ -1276,25 +1291,42 @@ class ReplayMemoryEpisodeTimeRewarded:
         Neural Network.
         """
 
-        # Random index of states and Q-values in the replay-memory.
-        # These have LOW estimation errors for the Q-values.
-        idx_lo = np.random.choice(self.idx_err_lo,
-                                  size=self.num_samples_err_lo,
-                                  replace=True)
+        idx_lo = []
+        idx_hi = []
+        #print("idx_err_lo:", self.idx_err_lo)
+        #print("idx_err_hi:", self.idx_err_hi)
 
-        # Random index of states and Q-values in the replay-memory.
-        # These have HIGH estimation errors for the Q-values.
-        idx_hi = np.random.choice(self.idx_err_hi,
-                                  size=self.num_samples_err_hi,
-                                  replace=True)  # TODO This should be False, but throws error when replay memory is full currently (?)
+        if len(self.idx_err_lo) > 0:
+            # Random index of states and Q-values in the replay-memory.
+            # These have LOW estimation errors for the Q-values.
+            idx_lo = np.random.choice(self.idx_err_lo,
+                                      size=self.num_samples_err_lo,
+                                      replace=True)
+        else:
+            idx_lo = np.array(idx_lo)
 
+        if len(self.idx_err_hi) > 0:
+            # Random index of states and Q-values in the replay-memory.
+            # These have HIGH estimation errors for the Q-values.
+            idx_hi = np.random.choice(self.idx_err_hi,
+                                      size=self.num_samples_err_hi,
+                                      replace=True)
+        else:
+            idx_hi = np.array(idx_hi)
+
+
+        #print("idx_lo:", idx_lo)
+        #print("idx_hi:", idx_hi)
+        #print("idx_lo type:", type(idx_lo))
+        #print("idx_hi type:", type(idx_hi))
         # Combine the indices.
-        idx = np.concatenate((idx_lo, idx_hi))
+        idx = np.array(list(map(int, np.concatenate([idx_lo, idx_hi]))))
+        #idx = np.concatenate([idx_lo, idx_hi])
+        #print["IDX IS", type(idx)]
 
         # Get the batches of states and Q-values.
         states_batch = self.states[idx]
         q_values_batch = self.q_values[idx]
-
         return states_batch, q_values_batch
 
     def all_batches(self, batch_size=128):
@@ -1541,7 +1573,7 @@ class ReplayMemoryEpisodeTimeRewarded:
             self.end_episode[-1] = True
 
             # We generate one reward per state stored during the episode
-            for state_number in range(survived_num_states):
+            for state_number in range(survived_num_states-1):
                 # We normalize scores between 1 and 0 where 1 is correct and 0 means you died because of the move
                 # The reward is larges for the first state and closest to 0 for the last state
                 # The last move killed you after all
