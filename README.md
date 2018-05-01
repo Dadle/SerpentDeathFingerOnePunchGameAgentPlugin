@@ -1,2 +1,2 @@
-# SerpentOneFingerDeathPunchGameAgentPlugin
-SerpentAI Game Agent plugin for One Finger Death Punch
+# SerpentDeathFingerOnePunchGameAgentPlugin
+SerpentAI Game Agent plugin for the game One Finger Death Punch
