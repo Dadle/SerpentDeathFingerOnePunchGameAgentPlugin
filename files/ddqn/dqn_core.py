@@ -699,26 +699,33 @@ class ReplayMemory:
         """Store Replay Memory object to file for checkpointing.
         The filename alternates between 1 and 2 in case something goes wrong while writing a checkpoint"""
         self.store_count += 1
-        with open(os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + self.env_name +
-                                               '_' + str(self.store_count % 2) + '.pkl'),
-                  'wb') as output:  # Overwrites any existing file.
+        checkpoint_file_path = os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + self.env_name +
+                                            '_' + str(self.store_count % 2) + '.pkl')
+        #checkpoint_file_path = 'checkpoint_replay_memory_' + self.env_name + '_' + str(self.store_count % 2) + '.pkl'
+        print(os.getcwd())
+        print(checkpoint_file_path)
+        with open(checkpoint_file_path, 'wb') as output:  # Overwrites any existing file.
             pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
 
     @staticmethod
     def load_memory_checkpoint(env_name):
         """Read the newest Replay Memory object file from disk and return the contained object"""
-        os.chdir(checkpoint_dir)
+        # os.chdir(checkpoint_dir)
         path = os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + env_name + '_*.pkl')
+        print(os.getcwd())
+        #path = os.path.join(os.getcwd(), 'checkpoint_replay_memory_' + env_name + '_*.pkl')
 
         # Get a list of all files under the input path in sorted oder from newest to oldest.
         # Input patch can contain any filter accepted by glob.glob such as * for wildchard characters
-        files = sorted(glob.glob(path), key=os.path.getmtime)
+        files = reversed(sorted(glob.glob(path), key=os.path.getmtime))
+        print("Found these checkpoint files:", files)
         # Try to read the file. The file could be corrupt and if so we should read the second newest file
         for file in files:
             try:
                 with open(file, 'rb') as memory_file:
                     return pickle.load(memory_file)
             except Exception:
+                os.close()
                 continue
         return None
 

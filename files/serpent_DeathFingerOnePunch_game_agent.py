@@ -348,7 +348,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         self.printer.flush()
 
-        if self.replay_memory.episode_statistics.num_episodes_completed % 10 == 0 \
+        if self.replay_memory.episode_statistics.num_episodes_completed % 1 == 0 \
                 and self.replay_memory.episode_statistics.num_episodes_completed > 0:
             print("Saving replay memory checkpoint, please give me a minute...")
             self.replay_memory.store_memory_checkpoint()
