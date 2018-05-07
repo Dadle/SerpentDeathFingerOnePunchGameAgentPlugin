@@ -707,8 +707,8 @@ class ReplayMemory:
     @staticmethod
     def load_memory_checkpoint(env_name):
         """Read the newest Replay Memory object file from disk and return the contained object"""
+        os.chdir(checkpoint_dir)
         path = os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + env_name + '_*.pkl')
-        os.chdir(path)
 
         # Get a list of all files under the input path in sorted oder from newest to oldest.
         # Input patch can contain any filter accepted by glob.glob such as * for wildchard characters

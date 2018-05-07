@@ -423,7 +423,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         # TEMP PRINT FOR DEBUGGING
         self.printer.add(f"Computing move in: {round(move_time, 3)} seconds")
-        self.printer.add(f"Effective APM: {round(effective_apm, 2)}")
+        self.printer.add(f"Effective decisions per second: {round(effective_apm, 2)}")
         #self.printer.add(f"Episode clock time: "
         #                 f"{self.episode_time // 3600} hours, "
         #                 f"{(self.episode_time // 60) % 60} minutes, "
