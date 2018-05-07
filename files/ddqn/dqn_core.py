@@ -700,7 +700,7 @@ class ReplayMemory:
         The filename alternates between 1 and 2 in case something goes wrong while writing a checkpoint"""
         self.store_count += 1
         with open(os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + self.env_name +
-                                               '_' + (self.store_count % 2) + '.pkl'),
+                                               '_' + str(self.store_count % 2) + '.pkl'),
                   'wb') as output:  # Overwrites any existing file.
             pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
 
