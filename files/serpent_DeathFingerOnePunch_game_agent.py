@@ -1,6 +1,7 @@
 import time
 from datetime import datetime
 import os
+import gc
 import psutil
 import offshoot
 import pyautogui
@@ -358,6 +359,10 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             self.train_dqn()
 
         self.reset_game_state()
+
+        # Perform garbage collection after each episode to avoid memory leakage over time
+        collected_garbage = gc.collect()
+        print("Garbage collector collected:", collected_garbage)
 
     def add_printer_head(self):
         run_time = datetime.now() - self.started_at
