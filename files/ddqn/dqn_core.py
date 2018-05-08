@@ -702,8 +702,8 @@ class ReplayMemory:
         checkpoint_file_path = os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + self.env_name +
                                             '_' + str(self.store_count % 2) + '.pkl')
         #checkpoint_file_path = 'checkpoint_replay_memory_' + self.env_name + '_' + str(self.store_count % 2) + '.pkl'
-        print(os.getcwd())
-        print(checkpoint_file_path)
+        #print(os.getcwd())
+        #print(checkpoint_file_path)
         with open(checkpoint_file_path, 'wb') as output:  # Overwrites any existing file.
             pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
 
