@@ -167,17 +167,9 @@
 import numpy as np
 import tensorflow as tf
 import scipy.ndimage
-import sys
 import os
-import time
-import csv
-import glob
-import argparse
-import download
-import datetime
-import collections
-import pickle
 from ..helpers.terminal_printer import TerminalPrinter
+from .replay_memory import ReplayMemory
 
 ########################################################################
 # File-paths are global variables for convenience so they don't
@@ -193,27 +185,19 @@ checkpoint_base_dir = 'checkpoints'
 # Combination of base-dir and environment-name.
 checkpoint_dir = None
 
-# Full path for the log-file for rewards.
-log_reward_path = None
-
-# Full path for the log-file for Q-values.
-log_q_values_path = None
-
 
 def update_paths(env_name):
     """
-    Update the path-names for the checkpoint-dir and log-files.
+    Update the path-names for the checkpoint-dir.
 
     Call this after you have changed checkpoint_base_dir and
     before you create the Neural Network.
 
     :param env_name:
-        Name of the game-environment you will use in OpenAI Gym.
+        Name of the game-environment you will use. This will be part of filenames for checkpoints.
     """
 
     global checkpoint_dir
-    global log_reward_path
-    global log_q_values_path
 
     # Add the environment-name to the checkpoint-dir.
     checkpoint_dir = os.path.join(checkpoint_base_dir, env_name)
@@ -221,199 +205,6 @@ def update_paths(env_name):
     # Create the checkpoint-dir if it does not already exist.
     if not os.path.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
-
-    # File-path for the log-file for episode rewards.
-    log_reward_path = os.path.join(checkpoint_dir, "log_reward.txt")
-
-    # File-path for the log-file for Q-values.
-    log_q_values_path = os.path.join(checkpoint_dir, "log_q_values.txt")
-
-
-########################################################################
-# Download TensorFlow checkpoints.
-
-# URL's for the checkpoint-files.
-_checkpoint_url = {
-    "Breakout-v0": "http://hvass-labs.org/projects/tensorflow/tutorial16/Breakout-v0.tar.gz",
-    "SpaceInvaders-v0": "http://hvass-labs.org/projects/tensorflow/tutorial16/SpaceInvaders-v0.tar.gz"
-}
-
-
-def maybe_download_checkpoint(env_name):
-    """
-    Download and extract the TensorFlow checkpoint for the given
-    environment-name, if it does not already exist in checkpoint_base_dir.
-    You should first set this dir and call update_paths().
-    """
-
-    # Get the url for the game-environment.
-    url = _checkpoint_url[env_name]
-
-    # Download and extract the file if it does not already exist.
-    download.maybe_download_and_extract(url=url,
-                                        download_dir=checkpoint_base_dir)
-
-
-########################################################################
-# Classes used for logging data during training.
-
-
-class Log:
-    """
-    Base-class for logging data to a text-file during training.
-    It is possible to use TensorFlow / TensorBoard for this,
-    but it is quite awkward to implement, as it was intended
-    for logging variables and other aspects of the TensorFlow graph.
-    We want to log the reward and Q-values which are not in that graph.
-    """
-
-    def __init__(self, file_path):
-        """Set the path for the log-file. Nothing is saved or loaded yet."""
-
-        # Path for the log-file.
-        self.file_path = file_path
-
-        # Data to be read from the log-file by the _read() function.
-        self.count_episodes = None
-        self.count_states = None
-        self.data = None
-
-    def _write(self, count_episodes, count_states, msg):
-        """
-        Write a line to the log-file. This is only called by sub-classes.
-
-        :param count_episodes:
-            Counter for the number of episodes processed during training.
-        :param count_states:
-            Counter for the number of states processed during training.
-        :param msg:
-            Message to write in the log.
-        """
-
-        with open(file=self.file_path, mode='a', buffering=1) as file:
-            msg_annotated = "{0}\t{1}\t{2}\n".format(count_episodes, count_states, msg)
-            file.write(msg_annotated)
-
-    def _read(self):
-        """
-        Read the log-file into memory so it can be plotted.
-        It sets self.count_episodes, self.count_states and self.data
-        """
-
-        # Open and read the log-file.
-        with open(self.file_path) as f:
-            reader = csv.reader(f, delimiter="\t")
-            self.count_episodes, self.count_states, *data = zip(*reader)
-
-        # Convert the remaining log-data to a NumPy float-array.
-        self.data = np.array(data, dtype='float')
-
-
-class LogReward(Log):
-    """Log the rewards obtained for episodes during training."""
-
-    def __init__(self):
-        # These will be set in read() below.
-        self.episode = None
-        self.mean = None
-
-        # Super-class init.
-        Log.__init__(self, file_path=log_reward_path)
-
-    def write(self, count_episodes, count_states, reward_episode, reward_mean):
-        """
-        Write the episode and mean reward to file.
-
-        :param count_episodes:
-            Counter for the number of episodes processed during training.
-        :param count_states:
-            Counter for the number of states processed during training.
-        :param reward_episode:
-            Reward for one episode.
-        :param reward_mean:
-            Mean reward for the last e.g. 30 episodes.
-        """
-
-        msg = "{0:.1f}\t{1:.1f}".format(reward_episode, reward_mean)
-        self._write(count_episodes=count_episodes, count_states=count_states, msg=msg)
-
-    def read(self):
-        """
-        Read the log-file into memory so it can be plotted.
-        It sets self.count_episodes, self.count_states, self.episode and self.mean
-        """
-
-        # Read the log-file using the super-class.
-        self._read()
-
-        # Get the episode reward.
-        self.episode = self.data[0]
-
-        # Get the mean reward.
-        self.mean = self.data[1]
-
-
-class LogQValues(Log):
-    """Log the Q-Values during training."""
-
-    def __init__(self):
-        # These will be set in read() below.
-        self.min = None
-        self.mean = None
-        self.max = None
-        self.std = None
-
-        # Super-class init.
-        Log.__init__(self, file_path=log_q_values_path)
-
-    def write(self, count_episodes, count_states, q_values):
-        """
-        Write basic statistics for the Q-values to file.
-        :param count_episodes:
-            Counter for the number of episodes processed during training.
-        :param count_states:
-            Counter for the number of states processed during training.
-        :param q_values:
-            Numpy array with Q-values from the replay-memory.
-        """
-
-        msg = "{0:.3f}\t{1:.3f}\t{2:.3f}\t{3:.3f}".format(np.min(q_values),
-                                                          np.mean(q_values),
-                                                          np.max(q_values),
-                                                          np.std(q_values))
-
-        self._write(count_episodes=count_episodes,
-                    count_states=count_states,
-                    msg=msg)
-
-    def read(self):
-        """
-        Read the log-file into memory so it can be plotted.
-        It sets self.count_episodes, self.count_states, self.min / mean / max / std.
-        """
-
-        # Read the log-file using the super-class.
-        self._read()
-
-        # Get the logged statistics for the Q-values.
-        self.min = self.data[0]
-        self.mean = self.data[1]
-        self.max = self.data[2]
-        self.std = self.data[3]
-
-
-########################################################################
-
-
-def print_progress(msg):
-    """
-    Print progress on a single line and overwrite the line.
-    Used during optimization.
-    """
-
-    sys.stdout.write("\r" + msg)
-    sys.stdout.flush()
-
 
 ########################################################################
 # A state is basically just a multi-dimensional array that is being
@@ -424,7 +215,7 @@ def print_progress(msg):
 # The original DeepMind paper used game-states consisting of 4 frames of
 # game-images that were gray-scaled, resized to 110 x 84 pixels, and then
 # cropped to 84 x 84 pixels because their implementation only supported this.
-
+"""
 # Height of each image-frame in the state.
 state_height = 72
 
@@ -439,7 +230,7 @@ state_channels = 2
 
 # Shape of the state-array.
 state_shape = [state_height, state_width, state_channels]
-
+"""
 
 ########################################################################
 # Functions and classes for processing images from the game-environment
@@ -461,14 +252,14 @@ def _rgb_to_grayscale(image):
     return img_gray
 
 
-def _pre_process_image(image):
+def _pre_process_image(image, target_size):
     """Pre-process a raw image from the game-environment."""
 
     # Convert image to gray-scale.
     img = _rgb_to_grayscale(image)
 
     # Resize to the desired size using SciPy for convenience.
-    img = scipy.misc.imresize(img, size=state_img_size, interp='bicubic')
+    img = scipy.misc.imresize(img, size=target_size, interp='bicubic')
 
     return img
 
@@ -491,7 +282,7 @@ class MotionTracer:
     to be tested.
     """
 
-    def __init__(self, image, decay=0.75):
+    def __init__(self, image, target_size, decay=0.75):
         """
 
         :param image:
@@ -503,11 +294,13 @@ class MotionTracer:
             the trace / tail is longer.
         """
 
+        self.target_size = target_size
+
         # Pre-process the image and save it for later use.
         # The input image may be 8-bit integers but internally
         # we need to use floating-point to avoid image-noise
         # caused by recurrent rounding-errors.
-        img = _pre_process_image(image=image)
+        img = _pre_process_image(image=image, target_size=self.target_size)
         self.last_input = img.astype(np.float)
 
         # Set the last output to zero.
@@ -519,7 +312,7 @@ class MotionTracer:
         """Process a raw image-frame from the game-environment."""
 
         # Pre-process the image so it is gray-scale and resized.
-        img = _pre_process_image(image=image)
+        img = _pre_process_image(image=image, target_size=self.target_size)
 
         # Subtract the previous input. This only leaves the
         # pixels that have changed in the two image-frames.
@@ -617,689 +410,6 @@ class LinearControlSignal:
         return value
 
 ########################################################################
-
-
-class ReplayMemory:
-    """
-    The replay-memory holds many previous states of the game-environment.
-    This helps stabilize training of the Neural Network because the data
-    is more diverse when sampled over thousands of different states.
-    """
-
-    def __init__(self, size, num_actions, env_name, discount_factor=0.66):
-        """
-
-        :param size:
-            Capacity of the replay-memory. This is the number of states.
-        :param num_actions:
-            Number of possible actions in the game-environment.
-        :param discount_factor:
-            Discount-factor used for updating Q-values.
-        """
-
-        # Name of this game agent, only used for checkpointing and naming files on disk
-        self.env_name = env_name
-
-        # Initialize a first episode memory
-        self.episode_memory = self.EpisodeReplayMemory()
-
-        # Object keeping track of statistics across episodes for printing
-        self.episode_statistics = self.EpisodeStatistics()
-
-        # Array for the previous states of the game-environment.
-        self.states = np.zeros(shape=[size] + state_shape, dtype=np.uint8)
-
-        # Array for the Q-values corresponding to the states.
-        self.q_values = np.zeros(shape=[size, num_actions], dtype=np.float)
-
-        # Array for the Q-values before being updated.
-        # This is used to compare the Q-values before and after the update.
-        self.q_values_old = np.zeros(shape=[size, num_actions], dtype=np.float)
-
-        # Actions taken for each of the states in the memory.
-        self.actions = np.zeros(shape=size, dtype=np.int)
-
-        # Rewards observed for each of the states in the memory.
-        self.rewards = np.zeros(shape=size, dtype=np.float)
-
-        # Number of kills made since last end_episode for each of the states in the memory
-        self.kill_count = np.zeros(shape=size, dtype=np.float)
-
-        # Number of misses made since last end_episode for each of the states in the memory
-        self.miss_count = np.zeros(shape=size, dtype=np.float)
-
-        # number of health points for each state
-        self.health = np.zeros(shape=size, dtype=np.bool)
-
-        # Whether the episode had ended (aka. game over) in each state.
-        self.end_episode = np.zeros(shape=size, dtype=np.bool)
-
-        # Estimation errors for the Q-values. This is used to balance
-        # the sampling of batches for training the Neural Network,
-        # so we get a balanced combination of states with high and low
-        # estimation errors for their Q-values.
-        self.estimation_errors = np.zeros(shape=size, dtype=np.float)
-
-        # Capacity of the replay-memory as the number of states.
-        self.size = size
-
-        # Discount-factor for calculating Q-values.
-        self.discount_factor = discount_factor
-
-        # Reset the number of used states in the replay-memory.
-        self.num_used = 0
-
-        # Threshold for splitting between low and high estimation errors.
-        self.error_threshold = 0.1
-
-        # The number of times this object has been stored to file
-        self.store_count = 0
-
-    def store_memory_checkpoint(self):
-        """Store Replay Memory object to file for checkpointing.
-        The filename alternates between 1 and 2 in case something goes wrong while writing a checkpoint"""
-        self.store_count += 1
-        checkpoint_file_path = os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + self.env_name +
-                                            '_' + str(self.store_count % 2) + '.pkl')
-        #checkpoint_file_path = 'checkpoint_replay_memory_' + self.env_name + '_' + str(self.store_count % 2) + '.pkl'
-        #print(os.getcwd())
-        #print(checkpoint_file_path)
-        with open(checkpoint_file_path, 'wb') as output:  # Overwrites any existing file.
-            pickle.dump(self, output, pickle.HIGHEST_PROTOCOL)
-
-    @staticmethod
-    def load_memory_checkpoint(env_name):
-        """Read the newest Replay Memory object file from disk and return the contained object"""
-        # os.chdir(checkpoint_dir)
-        path = os.path.join(checkpoint_dir, 'checkpoint_replay_memory_' + env_name + '_*.pkl')
-        print(os.getcwd())
-        #path = os.path.join(os.getcwd(), 'checkpoint_replay_memory_' + env_name + '_*.pkl')
-
-        # Get a list of all files under the input path in sorted oder from newest to oldest.
-        # Input patch can contain any filter accepted by glob.glob such as * for wildchard characters
-        files = reversed(sorted(glob.glob(path), key=os.path.getmtime))
-        print("Found these checkpoint files:", files)
-        # Try to read the file. The file could be corrupt and if so we should read the second newest file
-        for file in files:
-            try:
-                with open(file, 'rb') as memory_file:
-                    return pickle.load(memory_file)
-            except Exception:
-                os.close()
-                continue
-        return None
-
-    def is_full(self):
-        """Return boolean whether the replay-memory is full."""
-        return self.num_used == self.size
-
-    def used_fraction(self):
-        """Return the fraction of the replay-memory that is used."""
-        return self.num_used / self.size
-
-    def reset(self):
-        """Reset the replay-memory so it is empty."""
-        self.num_used = 0
-        self.episode_memory = self.EpisodeReplayMemory()
-        self.episode_statistics = self.EpisodeStatistics()
-
-    def reset_episode(self):
-        """Reset the episode replay-memory so it is ready for a new episode."""
-        self.episode_memory = self.EpisodeReplayMemory()
-
-    def add_episode_too_memory(self, episode_time_seconds):
-        """
-        Adds the completed current episode memory to the replay-memory as training material
-        """
-
-        self.episode_statistics.update_statistics(self.episode_memory, episode_time_seconds)
-
-        # While adding episode to replay memory we need to calculate the rewards
-        for index in range(len(self.episode_memory.states)):
-            if self.num_used >= self.size:
-                # If replay memory is full, remove the oldest memory and add the newest one at the end
-                #print("shape of memory after pop", self.states[1:].shape)
-                #print("shape of episode state", np.array([self.episode_memory.states[index]]).shape)
-                self.states = np.concatenate([self.states[1:], [self.episode_memory.states[index]]])
-                self.q_values = np.concatenate([self.q_values[1:], [self.episode_memory.q_values[index]]])
-                self.actions = np.concatenate([self.actions[1:], [self.episode_memory.actions[index]]])
-                self.rewards = np.concatenate([self.rewards[1:], [self.episode_memory.rewards[index]]])
-                self.kill_count = np.concatenate([self.kill_count[1:], [self.episode_memory.kill_count[index]]])
-                self.miss_count = np.concatenate([self.miss_count[1:], [self.episode_memory.miss_count[index]]])
-                self.health[k] = np.concatenate([self.kill_count[1:], [self.episode_memory.health[index]]])
-                self.end_episode = np.concatenate([self.end_episode[1:], [self.episode_memory.end_episode[index]]])
-                break
-            else:
-                # If there is still room in replay memory, add the episode at the end of the currently used memory
-                k = self.num_used
-
-                # Increase the number of used elements in the replay-memory.
-                self.num_used += 1
-                self.states[k] = self.episode_memory.states[index]
-                self.q_values[k] = self.episode_memory.q_values[index]
-                self.actions[k] = self.episode_memory.actions[index]
-                self.rewards[k] = self.episode_memory.rewards[index]
-                self.kill_count[k] = self.episode_memory.kill_count[index]
-                self.miss_count[k] = self.episode_memory.miss_count[index]
-                self.health[k] = self.episode_memory.health[index]
-                self.end_episode[k] = self.episode_memory.end_episode[index]
-
-        self.reset_episode()
-
-    def add(self, state, q_values, action, reward, kill_count, miss_count, health, end_episode):
-        """
-        Add an observed state from the game-environment, along with the
-        estimated Q-values, action taken, observed reward, etc.
-
-        :param state:
-            Current state of the game-environment.
-            This is the output of the MotionTracer-class.
-        :param q_values:
-            The estimated Q-values for the state.
-        :param action:
-            The action taken by the agent in this state of the game.
-        :param reward:
-            The reward that was observed from taking this action
-            and moving to the next state.
-        :param kill_count:
-            Number of kills made since last end_episode flag
-        :param health:
-            Number of health points for player. Int between 0 and 10
-        :param end_episode:
-            Boolean whether the agent has lost all lives aka. game over
-            aka. end of episode.
-        """
-
-        if not self.is_full():
-            # Index into the arrays for convenience.
-            k = self.num_used
-
-            # Increase the number of used elements in the replay-memory.
-            self.num_used += 1
-
-            # Store all the values in the replay-memory.
-            self.states[k] = state
-            self.q_values[k] = q_values
-            self.actions[k] = action
-            self.kill_count[k] = kill_count
-            self.miss_count[k] = miss_count
-            self.health[k] = health
-            self.end_episode[k] = end_episode
-
-            # Note that the reward is limited. This is done to stabilize
-            # the training of the Neural Network.
-            self.rewards[k] = np.clip(reward, -1.0, 1.0)
-        else:
-            # delete the oldest memory state and add the new one at the end as usual
-            # Store all the values in the replay-memory.
-            self.states = np.concatenate([self.states[1:], [state]])
-            self.q_values = np.concatenate([self.q_values[1:], [q_values]])
-            self.actions = np.concatenate([self.actions[1:], [action]])
-            self.kill_count = np.concatenate([self.kill_count[1:], [kill_count]])
-            self.miss_count = np.concatenate([self.miss_count[1:], [miss_count]])
-            self.health = np.concatenate([self.health[1:], [health]])
-            self.end_episode = np.concatenate([self.end_episode[1:], [end_episode]])
-
-            # Note that the reward is limited. This is done to stabilize
-            # the training of the Neural Network.
-            self.rewards = np.concatenate([self.rewards[1:], [np.clip(reward, -1.0, 1.0)]])
-
-    def update_all_q_values(self):
-        """
-        Update all Q-values in the replay-memory.
-
-        When states and Q-values are added to the replay-memory, the
-        Q-values have been estimated by the Neural Network. But we now
-        have more data available that we can use to improve the estimated
-        Q-values, because we now know which actions were taken and the
-        observed rewards. We sweep backwards through the entire replay-memory
-        to use the observed data to improve the estimated Q-values.
-        """
-
-        # Copy old Q-values so we can print their statistics later.
-        # Note that the contents of the arrays are copied.
-        self.q_values_old[:] = self.q_values[:]
-
-        # Process the replay-memory backwards and update the Q-values.
-        # This loop could be implemented entirely in NumPy for higher speed,
-        # but it is probably only a small fraction of the overall time usage,
-        # and it is much easier to understand when implemented like this.
-        for k in reversed(range(self.num_used - 1)):
-            # Get the data for the k'th state in the replay-memory.
-            action = self.actions[k]
-            reward = self.rewards[k]
-            # end_life = self.end_life[k]
-            # end_episode = self.end_episode[k]
-
-            # Calculate the Q-value for the action that was taken in this state.
-            # if end_life or end_episode:
-            # If the agent lost a life or it was game over / end of episode,
-            # then the value of taking the given action is just the reward
-            # that was observed in this single step. This is because the
-            # Q-value is defined as the discounted value of all future game
-            # steps in a single life of the agent. When the life has ended,
-            # there will be no future steps.
-            # action_value = reward
-            # else:
-            # Otherwise the value of taking the action is the reward that
-            # we have observed plus the discounted value of future rewards
-            # from continuing the game. We use the estimated Q-values for
-            # the following state and take the maximum, because we will
-            # generally take the action that has the highest Q-value.
-            action_value = reward + self.discount_factor * np.max(self.q_values[k + 1])
-
-            # Error of the Q-value that was estimated using the Neural Network.
-            self.estimation_errors[k] = abs(action_value - self.q_values[k, action])
-
-            # Update the Q-value with the better estimate.
-            self.q_values[k, action] = action_value
-
-        self.print_statistics()
-
-    def prepare_sampling_prob(self, batch_size=128):
-        """
-        Prepare the probability distribution for random sampling of states
-        and Q-values for use in training of the Neural Network.
-        The probability distribution is just a simple binary split of the
-        replay-memory based on the estimation errors of the Q-values.
-        The idea is to create a batch of samples that are balanced somewhat
-        evenly between Q-values that the Neural Network already knows how to
-        estimate quite well because they have low estimation errors, and
-        Q-values that are poorly estimated by the Neural Network because
-        they have high estimation errors.
-
-        The reason for this balancing of Q-values with high and low estimation
-        errors, is that if we train the Neural Network mostly on data with
-        high estimation errors, then it will tend to forget what it already
-        knows and hence become over-fit so the training becomes unstable.
-        """
-
-        # Get the errors between the Q-values that were estimated using
-        # the Neural Network, and the Q-values that were updated with the
-        # reward that was actually observed when an action was taken.
-        err = self.estimation_errors[0:self.num_used]
-
-        # Create an index of the estimation errors that are low.
-        idx = err < self.error_threshold
-        self.idx_err_lo = np.squeeze(np.where(idx))
-
-        # Create an index of the estimation errors that are high.
-        self.idx_err_hi = np.squeeze(np.where(np.logical_not(idx)))
-
-        # Probability of sampling Q-values with high estimation errors.
-        # This is either set to the fraction of the replay-memory that
-        # has high estimation errors - or it is set to 0.5. So at least
-        # half of the batch has high estimation errors.
-        prob_err_hi = len(self.idx_err_hi) / self.num_used
-        prob_err_hi = max(prob_err_hi, 0.5)
-
-        # Number of samples in a batch that have high estimation errors.
-        self.num_samples_err_hi = int(prob_err_hi * batch_size)
-
-        # Number of samples in a batch that have low estimation errors.
-        self.num_samples_err_lo = batch_size - self.num_samples_err_hi
-
-    def random_batch(self):
-        """
-        Get a random batch of states and Q-values from the replay-memory.
-        You must call prepare_sampling_prob() before calling this function,
-        which also sets the batch-size.
-        The batch has been balanced so it contains states and Q-values
-        that have both high and low estimation errors for the Q-values.
-        This is done to both speed up and stabilize training of the
-        Neural Network.
-        """
-
-        # Random index of states and Q-values in the replay-memory.
-        # These have LOW estimation errors for the Q-values.
-        idx_lo = np.random.choice(self.idx_err_lo,
-                                  size=self.num_samples_err_lo,
-                                  replace=True)
-
-        # Random index of states and Q-values in the replay-memory.
-        # These have HIGH estimation errors for the Q-values.
-        idx_hi = np.random.choice(self.idx_err_hi,
-                                  size=self.num_samples_err_hi,
-                                  replace=True)  # TODO This should be False, but throws error when replay memory is full currently (?)
-
-        # Combine the indices.
-        idx = np.concatenate((idx_lo, idx_hi))
-
-        # Get the batches of states and Q-values.
-        states_batch = self.states[idx]
-        q_values_batch = self.q_values[idx]
-
-        return states_batch, q_values_batch
-
-    def all_batches(self, batch_size=128):
-        """
-        Iterator for all the states and Q-values in the replay-memory.
-        It returns the indices for the beginning and end, as well as
-        a progress-counter between 0.0 and 1.0.
-
-        This function is not currently being used except by the function
-        estimate_all_q_values() below. These two functions are merely
-        included to make it easier for you to experiment with the code
-        by showing you an easy and efficient way to loop over all the
-        data in the replay-memory.
-        """
-
-        # Start index for the current batch.
-        begin = 0
-
-        # Repeat until all batches have been processed.
-        while begin < self.num_used:
-            # End index for the current batch.
-            end = begin + batch_size
-
-            # Ensure the batch does not exceed the used replay-memory.
-            if end > self.num_used:
-                end = self.num_used
-
-            # Progress counter.
-            progress = end / self.num_used
-
-            # Yield the batch indices and completion-counter.
-            yield begin, end, progress
-
-            # Set the start-index for the next batch to the end of this batch.
-            begin = end
-
-    def estimate_all_q_values(self, model):
-        """
-        Estimate all Q-values for the states in the replay-memory
-        using the model / Neural Network.
-        Note that this function is not currently being used. It is provided
-        to make it easier for you to experiment with this code, by showing
-        you an efficient way to iterate over all the states and Q-values.
-        :param model:
-            Instance of the NeuralNetwork-class.
-        """
-
-        print("Re-calculating all Q-values in replay memory ...")
-
-        # Process the entire replay-memory in batches.
-        for begin, end, progress in self.all_batches():
-            # Print progress.
-            msg = "\tProgress: {0:.0%}"
-            msg = msg.format(progress)
-            print_progress(msg)
-
-            # Get the states for the current batch.
-            states = self.states[begin:end]
-
-            # Calculate the Q-values using the Neural Network
-            # and update the replay-memory.
-            self.q_values[begin:end] = model.get_q_values(states=states)
-
-        # Newline.
-        print()
-
-    def print_statistics(self):
-        """Print statistics for the contents of the replay-memory."""
-
-        print("Replay-memory statistics:")
-
-        # Print statistics for the Q-values before they were updated
-        # in update_all_q_values().
-        msg = "\tQ-values Before, Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
-        print(msg.format(np.min(self.q_values_old),
-                         np.mean(self.q_values_old),
-                         np.max(self.q_values_old)))
-
-        # Print statistics for the Q-values after they were updated
-        # in update_all_q_values().
-        msg = "\tQ-values After,  Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
-        print(msg.format(np.min(self.q_values),
-                         np.mean(self.q_values),
-                         np.max(self.q_values)))
-
-        # Print statistics for the difference in Q-values before and
-        # after the update in update_all_q_values().
-        q_dif = self.q_values - self.q_values_old
-        msg = "\tQ-values Diff.,  Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
-        print(msg.format(np.min(q_dif),
-                         np.mean(q_dif),
-                         np.max(q_dif)))
-
-        # Print statistics for the number of large estimation errors.
-        # Don't use the estimation error for the last state in the memory,
-        # because its Q-values have not been updated.
-        err = self.estimation_errors[:-1]
-        err_count = np.count_nonzero(err > self.error_threshold)
-        msg = "\tNumber of large errors > {0}: {1} / {2} ({3:.1%})"
-        print(msg.format(self.error_threshold, err_count,
-                         self.num_used, err_count / self.num_used))
-
-    class EpisodeReplayMemory:
-        """
-        Episode replay memory stores the states for an episode until we can calculate rewards and add the memory
-        to the historic replay memory and use it for training
-        """
-        def __init__(self):
-            """
-            The initialization is the same as for ReplayMemory,
-            but uses dynamic arrays since we do not know the length of an episode
-            """
-
-            # Array for the previous states of the game-environment.
-            self.states = []
-
-            # Array for the Q-values corresponding to the states.
-            self.q_values = []
-
-            # Array for the Q-values before being updated.
-            # This is used to compare the Q-values before and after the update.
-            self.q_values_old = []
-
-            # Actions taken for each of the states in memory
-            self.actions = []
-
-            # Rewards observed for each of the states in memory
-            self.rewards = []
-
-            # kill_count observed for each of the states in memory
-            self.kill_count = []
-
-            # Number of times player has missed for each state in memory
-            self.miss_count = []
-
-            # Number of health points for player for each state in memory
-            self.health = []
-
-            # Whether the episode had ended (aka. game over) in each state.
-            self.end_episode = []
-
-        def reset(self):
-            """Reset the episode replay-memory so it is empty."""
-
-            # Array for the previous states of the game-environment.
-            self.states = []
-
-            # Array for the Q-values corresponding to the states.
-            self.q_values = []
-
-            # Array for the Q-values before being updated.
-            # This is used to compare the Q-values before and after the update.
-            self.q_values_old = []
-
-            # Actions taken for each state in memory.
-            self.actions = []
-
-            # Rewards observed for each state in memory.
-            self.rewards = []
-
-            # kill_count observed for each state in memory.
-            self.kill_count = []
-
-            # Number of times player has missed for each state in memory
-            self.miss_count = []
-
-            # Number of health points for player for each state in memory
-            self.health = []
-
-            # Whether the episode had ended (aka. game over) in each state.
-            self.end_episode = []
-
-            self.num_used = 0
-
-        def add(self, state, q_values, action, reward, kill_count, miss_count, health, end_episode):
-            """
-            Add an observed state from the game-environment, along with the
-            estimated Q-values, action taken, etc.
-
-            :param state:
-                Current state of the game-environment.
-                This is the output of the MotionTracer-class.
-            :param q_values:
-                The estimated Q-values for the state.
-            :param action:
-                The action taken by the agent in this state of the game.
-            :param reward:
-                The reward given to the game agent for it's actions
-            :param kill_count:
-                Number of kills made so far this run
-            :param miss_count:
-                Number of times player has missed so far this run
-            :param health:
-                Number of health points for player. Int between 0 and 10
-            :param end_episode:
-                Boolean whether the agent has lost all lives aka. game over
-                aka. end of episode.
-            """
-
-            # set size of episode memory
-            self.num_used = len(self.states)
-
-            # Store all the values in the replay-memory.
-            self.states.append(state)
-            self.q_values.append(q_values)
-            self.actions.append(action)
-            self.rewards.append(reward)
-            self.kill_count.append(kill_count)
-            self.miss_count.append(miss_count)
-            self.health.append(health)
-            self.end_episode.append(end_episode)
-
-            # Note that the reward is limited. This is done to stabilize
-            # the training of the Neural Network.
-            #self.rewards[k] = np.clip(reward, -1.0, 1.0)
-
-        def episode_end(self):
-            """
-            When the episode ends we know the final score and can run the
-            episode again to calculate the reward per state
-
-            :return: states:
-                Sequential list of the states totaling the episode
-            :return: q_values:
-                Sequential list of q_value lists calculated per state
-            :return: actions:
-                A sequential list of the action taken for each state
-            :return: rewards:
-                A list fot he rewards for each state throughout the episode
-            :return: end_episode:
-                True if the entry is the last index of the episode, False otherwise
-            """
-
-            # The end reward for the episode is the number of states we managed to store while playing
-            survived_num_states = len(self.states)
-            self.end_episode[-1] = True
-
-            """
-            # We generate one reward per state stored during the episode
-            for state_number in range(survived_num_states-1):
-                # We normalize scores between 1 and 0 where 1 is correct and 0 means you died because of the move
-                # The reward is larges for the first state and closest to 0 for the last state
-                # The last move killed you after all
-                self.rewards.append(self.reward(state_number, survived_num_states))
-            """
-
-            self.print_episode_statistics()
-
-            return self.states, self.q_values, self.actions, self.rewards, self.kill_count, self.miss_count, self.health, self.end_episode
-
-        @staticmethod
-        def reward(state_number, episode_length):
-            """
-                        NOT IN USE IN THIS MODULE - REWARD IS PROVIDED EXTERNALLY
-
-                        When the episode ends we know the final score and can run the
-                        episode again to calculate the reward per state
-
-                        :param: state_number:
-                            Index of the state for the episode
-                        :param: episode_length:
-                            number of states in the episode
-                        :return: reward:
-                            Reward for the state given as state_number in this episode
-                        """
-            # print(f"CALCULATED REWARD: {(1 - (1 / episode_length)) ** state_number}")
-            return (1 - (1 / episode_length)) ** state_number
-
-        def print_episode_statistics(self):
-            """Print statistics for the episode in the episode replay-memory."""
-
-            print("Episode replay-memory statistics:")
-
-            # Print episode length
-            print("\tEpisode lasted", len(self.states), "states resulting in total reward of", sum(self.rewards))
-
-    class EpisodeStatistics:
-        """
-        Statistics for printing the status of the game agent and its achievements
-        """
-
-        def __init__(self):
-            self.record_episode = 0
-            self.record_episode_time = 0
-            self.record_kill_count = 0
-
-            self.time_last_10 = collections.deque(list(), maxlen=10)
-            self.time_last_100 = collections.deque(list(), maxlen=100)
-            self.time_last_1000 = collections.deque(list(), maxlen=1000)
-            self.average_time_10 = 0
-            self.average_time_100 = 0
-            self.average_time_1000 = 0
-
-            self.kill_count_last_10 = collections.deque(list(), maxlen=10)
-            self.kill_count_last_100 = collections.deque(list(), maxlen=100)
-            self.kill_count_last_1000 = collections.deque(list(), maxlen=1000)
-            self.average_kill_count_10 = 0
-            self.average_kill_count_100 = 0
-            self.average_kill_count_1000 = 0
-
-            self.num_episodes_completed = 0
-            self.last_episode_time = 0
-            self.last_episode_kill_count = 0
-
-        def update_statistics(self, episode_memory, episode_time_seconds):
-            # Catch if this is called before any episode has been run so it does not crash
-            if len(episode_memory.states) == 0:
-                return
-
-            self.num_episodes_completed += 1
-            self.last_episode_time = episode_time_seconds
-            self.last_episode_kill_count = episode_memory.kill_count[-1]
-
-            if self.record_episode_time < self.last_episode_time:
-                self.record_episode_time = self.last_episode_time
-                self.record_episode = self.num_episodes_completed
-                self.record_kill_count = episode_memory.kill_count[-1]
-
-            self.time_last_10.appendleft(self.last_episode_time)
-            self.time_last_100.appendleft(self.last_episode_time)
-            self.time_last_1000.appendleft(self.last_episode_time)
-            self.average_time_10 = float(np.mean(self.time_last_10))
-            self.average_time_100 = float(np.mean(self.time_last_100))
-            self.average_time_1000 = float(np.mean(self.time_last_1000))
-
-            self.kill_count_last_10.appendleft(episode_memory.kill_count[-1])
-            self.kill_count_last_100.appendleft(episode_memory.kill_count[-1])
-            self.kill_count_last_1000.appendleft(episode_memory.kill_count[-1])
-            self.average_kill_count_10 = float(np.mean(self.kill_count_last_10))
-            self.average_kill_count_100 = float(np.mean(self.kill_count_last_100))
-            self.average_kill_count_1000 = float(np.mean(self.kill_count_last_1000))
 
 
 ########################################################################
@@ -1408,7 +518,7 @@ class NeuralNetwork:
     better at estimating the Q-values.
     """
 
-    def __init__(self, num_actions, replay_memory, use_pretty_tensor=True):
+    def __init__(self, num_actions, state_shape, replay_memory, use_pretty_tensor=True):
         """
         :param num_actions:
             Number of discrete actions for the game-environment.
@@ -1493,7 +603,7 @@ class NeuralNetwork:
         # to zero - but the network weights must not be too low either
         # because it will make it hard to train the network.
         # You can experiment with values between 1e-2 and 1e-3.
-        init = tf.truncated_normal_initializer(mean=0.0, stddev=2e-2)
+        init = tf.truncated_normal_initializer(mean=0.0, stddev=2e-3)
 
         if self.use_pretty_tensor:
             # This builds the Neural Network using the PrettyTensor API,
@@ -1507,15 +617,18 @@ class NeuralNetwork:
 
             # Create the convolutional Neural Network using Pretty Tensor.
             with pt.defaults_scope(activation_fn=tf.nn.relu):
+                # NOTE: orginally set with 4 fully connected hidden layers with 1024 neurons each
+                # Reduced number of fully connected layers to try and have the agent learn more with less
+                # Also changed kernes in cnn layers from 3,3,3 to 5,4,3 to allow more aggressive down sampling
+                # Added dropout for fully connected layers with 4% chance for neurons to be deactivated during training
+                keep_prob = 0.96  # delayed using the dropout for now, but leaving this as a remainder for later
                 self.q_values = x_pretty. \
-                    conv2d(kernel=3, depth=16, stride=2, name='layer_conv1', weights=init). \
-                    conv2d(kernel=3, depth=32, stride=2, name='layer_conv2', weights=init). \
+                    conv2d(kernel=5, depth=16, stride=3, name='layer_conv1', weights=init). \
+                    conv2d(kernel=4, depth=32, stride=2, name='layer_conv2', weights=init). \
                     conv2d(kernel=3, depth=64, stride=1, name='layer_conv3', weights=init). \
                     flatten(). \
-                    fully_connected(size=1024, name='layer_fc1', weights=init). \
-                    fully_connected(size=1024, name='layer_fc2', weights=init). \
-                    fully_connected(size=1024, name='layer_fc3', weights=init). \
-                    fully_connected(size=1024, name='layer_fc4', weights=init). \
+                    fully_connected(size=256, name='layer_fc1', weights=init). \
+                    fully_connected(size=128, name='layer_fc2', weights=init). \
                     fully_connected(size=num_actions, name='layer_fc_out', weights=init,
                                     activation_fn=None)
 
@@ -1608,7 +721,9 @@ class NeuralNetwork:
         # Optimizer used for minimizing the loss-function.
         # Note the learning-rate is a placeholder variable so we can
         # lower the learning-rate as optimization progresses.
-        self.optimizer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
+        # -- Original optimizer --
+        # self.optimizer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
 
         # Used for saving and loading checkpoints.
         self.saver = tf.train.Saver()
@@ -1711,14 +826,6 @@ class NeuralNetwork:
             Learning-rate to use for the optimizer.
         """
 
-        """
-        print("Optimizing Neural Network to better estimate Q-values:")
-        print("\tLearning-rate: {0:.1e}".format(learning_rate))
-        print("\tLoss-limit: {0:.3f}".format(loss_limit))
-        print("\tMax epochs: {0:.1f}".format(max_epochs))
-        print("")
-        """
-
         self.printer.add("Optimizing Neural Network to better estimate Q-values:")
         self.printer.add("\tLearning-rate: {0:.1e}".format(learning_rate))
         self.printer.add("\tLoss-limit: {0:.3f}".format(loss_limit))
@@ -1763,24 +870,27 @@ class NeuralNetwork:
             # Calculate the average loss for the previous batches.
             loss_mean = np.mean(loss_history)
 
-            # Print status.
+            # Print training status.
+            self.printer.add("Capgemini Intelligent Automation - Death Finger One Punch agent")
+            self.printer.add("Reinforcement Learning: Training a DQN Agent")
+            self.printer.add("")
+            self.printer.add("Optimizing Neural Network to better estimate Q-values:")
+            self.printer.add("\tLearning-rate: {0:.1e}".format(learning_rate))
+            self.printer.add("\tLoss-limit: {0:.3f}".format(loss_limit))
+            self.printer.add("\tMax epochs: {0:.1f}".format(max_epochs))
             self.printer.empty_line()
             pct_epoch = i / iterations_per_epoch
-            msg = "Iteration: {0} ({1:.1f} epoch), Batch loss: {2:.2f}, Mean loss: {3:.2f}"
-            msg = msg.format(i, pct_epoch, round(loss_val, 2), round(loss_mean, 2))
-            self.printer.add(msg)
+            self.printer.add(f"Iteration:             {i} ({round(pct_epoch, 1)} epoch) "
+                             f"\nBatch loss:            {round(loss_val, 2)} "
+                             f"\nBatch loss magnitude:  {len(str(int(loss_val)))}"
+                             f"\nMean loss:             {round(loss_mean, 2)}"
+                             f"\nMean loss magnitude:   {len(str(int(loss_mean)))}")
             self.printer.flush()
-            #print(msg,
-            #    end="", flush=True)
-            #print(f"\rIteration: {i} ({round(pct_epoch,2)} epoch), Batch loss: {round(loss_val,2)}, Mean loss: {round(loss_mean,2)}\r", end="", flush=True)
 
             # Stop the optimization if we have performed the required number
             # of iterations and the loss-value is sufficiently low.
             if i > min_iterations and loss_mean < loss_limit:
                 break
-
-        # Print newline.
-        print("")
 
     def get_weights_variable(self, layer_name):
         """
@@ -1877,7 +987,7 @@ class Agent:
     instances of the Replay Memory and Neural Network.
     """
 
-    def __init__(self, action_list, env_name, training, render=False, use_logging=True):
+    def __init__(self, action_list, state_shape, env_name, training, render=False):
         """
         Create an object-instance. This also creates a new object for the
         Replay Memory and the Neural Network.
@@ -1885,17 +995,15 @@ class Agent:
         Replay Memory will only be allocated if training==True.
         :param action_list:
             List of actions the agent is allowed to choose from
+        :param state_shape:
+            Shape of each state object the agent will receive while running
         :param env_name:
-            Name of the game-environment in OpenAI Gym.
-            Examples: 'Breakout-v0' and 'SpaceInvaders-v0'
+            Name of the game agent. Used as part of filenames for checkpointing
         :param training:
             Boolean whether to train the agent and Neural Network (True),
             or test the agent by playing a number of episodes of the game (False).
-
         :param render:
-            Boolean whether to render the game-images to screen during testing.
-        :param use_logging:
-            Boolean whether to use logging to text-files during training.
+            Boolean whether to render the game-images to screen during testing. CURRENTLY NOT IMPLEMENTED
         """
 
         # Name of the environment. Only used for locating checkpoint files
@@ -1904,22 +1012,15 @@ class Agent:
         # The number of possible actions that the agent may take in every step.
         self.num_actions = len(action_list)
 
+        # This is the dimensions of each state given from the environment.
+        # In case of image input it is generally in the form of (height, width, num_channels) (tf default sequence)
+        self.state_shape = list(state_shape)
+
         # Whether we are training (True) or testing (False).
         self.training = training
 
         # Whether to render each image-frame of the game-environment to screen.
         self.render = render
-
-        # Whether to use logging during training.
-        self.use_logging = use_logging
-
-        if self.use_logging and self.training:
-            # Used for logging Q-values and rewards during training.
-            self.log_q_values = LogQValues()
-            self.log_reward = LogReward()
-        else:
-            self.log_q_values = None
-            self.log_reward = None
 
         # List of string-names for the actions in the game-environment.
         self.action_names = action_list  # self.env.unwrapped.get_action_meanings()
@@ -1937,8 +1038,8 @@ class Agent:
             # The following control-signals are only used during training.
 
             # The learning-rate for the optimizer decreases linearly.
-            self.learning_rate_control = LinearControlSignal(start_value=1e-3,
-                                                             end_value=1e-6,
+            self.learning_rate_control = LinearControlSignal(start_value=1e-6,
+                                                             end_value=1e-11,
                                                              num_iterations=5e6)
 
             # The loss-limit is used to abort the optimization whenever the
@@ -1954,8 +1055,8 @@ class Agent:
             # Later in the training we would occasionally get rare events
             # and would therefore have to optimize for more iterations
             # because the learning-rate had been decreased.
-            self.max_epochs_control = LinearControlSignal(start_value=5.0,
-                                                          end_value=10.0,
+            self.max_epochs_control = LinearControlSignal(start_value=7.0,
+                                                          end_value=20.0,
                                                           num_iterations=5e6)
 
             # The fraction of the replay-memory to be used.
@@ -1985,7 +1086,7 @@ class Agent:
 
             print("***************************************************************")
             print("Trying to load replay memory from checkpoint...")
-            self.replay_memory = ReplayMemory.load_memory_checkpoint(self.env_name)
+            self.replay_memory = ReplayMemory.load_memory_checkpoint(self.env_name, checkpoint_dir)
 
             if self.replay_memory is not None:
                 print("***************************************************************")
@@ -1997,246 +1098,17 @@ class Agent:
                 print("***************************************************************")
                 self.replay_memory = ReplayMemory(size=200000,
                                                   num_actions=self.num_actions,
-                                                  env_name=self.env_name)
+                                                  state_shape=self.state_shape,
+                                                  env_name=self.env_name,
+                                                  checkpoint_dir=checkpoint_dir)
         else:
             self.replay_memory = None
 
         # Create the Neural Network used for estimating Q-values.
         self.model = NeuralNetwork(num_actions=self.num_actions,
+                                   state_shape=self.state_shape,
                                    replay_memory=self.replay_memory)
-
-        # Log of the rewards obtained in each episode during calls to run()
-        self.episode_rewards = []
-
-    def reset_episode_rewards(self):
-        """Reset the log of episode-rewards."""
-        self.episode_rewards = []
 
     def get_action_name(self, action):
         """Return the name of an action."""
         return self.action_names[action]
-
-    def get_lives(self):
-        """Get the number of lives the agent has in the game-environment."""
-        return 1  # self.env.unwrapped.ale.lives() # TODO Have no way of reading lives currently
-
-    def run(self, img, end_episode):
-        """
-        Run the game-environment and use the Neural Network to decide
-        which actions to take in each step through Q-value estimates.
-        """
-
-        # This will cause a reset in the first iteration of the following loop.
-        # end_episode = True
-
-        # Counter for the number of states we have processed.
-        # This is stored in the TensorFlow graph so it can be
-        # saved and reloaded along with the checkpoint.
-        count_states = self.model.get_count_states()
-
-        # Counter for the number of episodes we have processed.
-        count_episodes = self.model.get_count_episodes()
-
-        if end_episode:
-            # Reset the game-environment and get the first image-frame.
-            # img = self.env.reset()
-
-            # Create a new motion-tracer for processing images from the
-            # game-environment. Initialize with the first image-frame.
-            # This resets the motion-tracer so the trace starts again.
-            # This could also be done if end_life==True.
-            motion_tracer = MotionTracer(img)
-
-            # Reset the reward for the entire episode to zero.
-            # This is only used for printing statistics.
-            reward_episode = 0.0
-
-            # Increase the counter for the number of episodes.
-            # This counter is stored inside the TensorFlow graph
-            # so it can be saved and restored with the checkpoint.
-            count_episodes = self.model.increase_count_episodes()
-
-            # Get the number of lives that the agent has left in this episode. TODO Do I need this?
-            # num_lives = self.get_lives()
-
-        # Get the state of the game-environment from the motion-tracer.
-        # The state has two images: (1) The last image-frame from the game
-        # and (2) a motion-trace that shows movement trajectories.
-        state = motion_tracer.get_state()
-
-        # Use the Neural Network to estimate the Q-values for the state.
-        # Note that the function assumes an array of states and returns
-        # a 2-dim array of Q-values, but we just have a single state here.
-        q_values = self.model.get_q_values(states=[state])[0]
-
-        # Determine the action that the agent must take in the game-environment.
-        # The epsilon is just used for printing further below.
-        action, epsilon = self.epsilon_greedy.get_action(q_values=q_values,
-                                                         iteration=count_states,
-                                                         training=self.training)
-
-        # Take a step in the game-environment using the given action.
-        # Note that in OpenAI Gym, the step-function actually repeats the
-        # action between 2 and 4 time-steps for Atari games, with the number
-        # chosen at random.
-        img, reward, end_episode, info = self.env.step(action=action)
-
-        # Process the image from the game-environment in the motion-tracer.
-        # This will first be used in the next iteration of the loop.
-        motion_tracer.process(image=img)
-
-        # Add the reward for the step to the reward for the entire episode.
-        reward_episode += reward
-
-        # Determine if a life was lost in this step. TODO Do I want this?
-        # num_lives_new = self.get_lives()
-        # end_life = (num_lives_new < num_lives)
-        # num_lives = num_lives_new
-
-        # Increase the counter for the number of states that have been processed.
-        count_states = self.model.increase_count_states()
-
-        if not self.training and self.render:
-            # Render the game-environment to screen.
-            self.env.render()
-
-            # Insert a small pause to slow down the game,
-            # making it easier to follow for human eyes.
-            time.sleep(0.01)
-
-        # If we want to train the Neural Network to better estimate Q-values.
-        if self.training:
-            # Add the state of the game-environment to the replay-memory.
-            self.replay_memory.add(state=state,
-                                   q_values=q_values,
-                                   action=action,
-                                   reward=reward,
-                                   # end_life=end_life,
-                                   end_episode=end_episode)
-
-            # How much of the replay-memory should be used.
-            use_fraction = self.replay_fraction.get_value(iteration=count_states)
-
-            # When the replay-memory is sufficiently full.
-            if self.replay_memory.is_full() \
-                    or True:  # self.replay_memory.used_fraction() > use_fraction:
-
-                # Update all Q-values in the replay-memory through a backwards-sweep.
-                self.replay_memory.update_all_q_values_time_rewarded()
-
-                # Log statistics for the Q-values to file.
-                if self.use_logging:
-                    self.log_q_values.write(count_episodes=count_episodes,
-                                            count_states=count_states,
-                                            q_values=self.replay_memory.q_values)
-
-                # Get the control parameters for optimization of the Neural Network.
-                # These are changed linearly depending on the state-counter.
-                learning_rate = self.learning_rate_control.get_value(iteration=count_states)
-                loss_limit = self.loss_limit_control.get_value(iteration=count_states)
-                max_epochs = self.max_epochs_control.get_value(iteration=count_states)
-
-                # Perform an optimization run on the Neural Network so as to
-                # improve the estimates for the Q-values.
-                # This will sample random batches from the replay-memory.
-                self.model.optimize(learning_rate=learning_rate,
-                                    loss_limit=loss_limit,
-                                    max_epochs=max_epochs)
-
-                # Save a checkpoint of the Neural Network so we can reload it.
-                self.model.save_checkpoint(count_states)
-
-                # Reset the replay-memory. This throws away all the data we have
-                # just gathered, so we will have to fill the replay-memory again.
-                self.replay_memory.reset()
-
-        if end_episode:
-            # Add the episode's reward to a list for calculating statistics.
-            self.episode_rewards.append(reward_episode)
-
-        # Mean reward of the last 30 episodes.
-        if len(self.episode_rewards) == 0:
-            # The list of rewards is empty.
-            reward_mean = 0.0
-        else:
-            reward_mean = np.mean(self.episode_rewards[-30:])
-
-        if self.training and end_episode:
-            # Log reward to file.
-            if self.use_logging:
-                self.log_reward.write(count_episodes=count_episodes,
-                                      count_states=count_states,
-                                      reward_episode=reward_episode,
-                                      reward_mean=reward_mean)
-
-            # Print reward to screen.
-            msg = "{0:4}:{1}\t Epsilon: {2:4.2f}\t Reward: {3:.1f}\t Episode Mean: {4:.1f}"
-            print(msg.format(count_episodes, count_states, epsilon,
-                             reward_episode, reward_mean))
-        elif not self.training and (reward != 0.0 or end_episode):  # or end_life
-            # Print Q-values and reward to screen.
-            msg = "{0:4}:{1}\tQ-min: {2:5.3f}\tQ-max: {3:5.3f}\tReward: {5:.1f}\tEpisode Mean: {6:.1f}"  # "Lives: {4}\t" \
-            print(msg.format(count_episodes, count_states, np.min(q_values),
-                             np.max(q_values),
-                             # num_lives,
-                             reward_episode, reward_mean))
-
-
-########################################################################
-
-if __name__ == '__main__':
-    # Description of this program.
-    desc = "Reinformenct Learning (Q-learning) for Atari Games using TensorFlow."
-
-    # Create the argument parser.
-    parser = argparse.ArgumentParser(description=desc)
-
-    # Add arguments to the parser.
-    parser.add_argument("--env", required=False, default='Breakout-v0',
-                        help="name of the game-environment in OpenAI Gym")
-
-    parser.add_argument("--training", required=False,
-                        dest='training', action='store_true',
-                        help="train the agent (otherwise test the agent)")
-
-    parser.add_argument("--render", required=False,
-                        dest='render', action='store_true',
-                        help="render game-output to screen")
-
-    parser.add_argument("--episodes", required=False, type=int, default=None,
-                        help="number of episodes to run")
-
-    parser.add_argument("--dir", required=False, default=checkpoint_base_dir,
-                        help="directory for the checkpoint and log-files")
-
-    # Parse the command-line arguments.
-    args = parser.parse_args()
-
-    # Get the arguments.
-    env_name = args.env
-    training = args.training
-    render = args.render
-    num_episodes = args.episodes
-    checkpoint_base_dir = args.dir
-
-    # Update all the file-paths after the base-dir has been set.
-    update_paths(env_name=env_name)
-
-    # Create an agent for either training or testing on the game-environment.
-    agent = Agent(env_name=env_name,
-                  training=training,
-                  render=render)
-
-    # Run the agent
-    agent.run(num_episodes=num_episodes)
-
-    # Print statistics.
-    rewards = agent.episode_rewards
-    print()  # Newline.
-    print("Rewards for {0} episodes:".format(len(rewards)))
-    print("- Min:   ", np.min(rewards))
-    print("- Mean:  ", np.mean(rewards))
-    print("- Max:   ", np.max(rewards))
-    print("- Stdev: ", np.std(rewards))
-
-########################################################################

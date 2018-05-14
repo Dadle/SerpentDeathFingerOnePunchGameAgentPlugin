@@ -22,21 +22,22 @@ class MemoryManager:
         self.processHandle = ctypes.windll.kernel32.OpenProcess(self.PROCESS_ALL_ACCESS, False, self.PID)
 
         #print(f"HWND: {self.HWND}")
-        print(f"PID: {self.PID}")
+        #print(f"PID: {self.PID}")
         print(f"PROCESS: {self.processHandle}")
 
         # Open process for reading & writing:
         self.BaseAddress = win32process.EnumProcessModules(self.processHandle)[0]
-        print("Base memory address", hex(self.BaseAddress))
+        #print("Base memory address", hex(self.BaseAddress))
 
         # Read out the app base (this is not the program / module base, the 'app' is just a huge object):
         self.appBase = c_int()
         self.numRead = c_int()
 
+        # NOT USED CURRENTLY
         game_memory_address = 0x00330000
         self.game = c_int()
         self.ReadProcessMemory(self.processHandle, self.BaseAddress + game_memory_address, byref(self.game), 4, byref(self.numRead))
-        print("Game memory address", hex(self.game.value))
+        #print("Game memory address", hex(self.game.value))
 
     def read_kill_count(self):
         """

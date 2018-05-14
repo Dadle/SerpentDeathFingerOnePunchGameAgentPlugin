@@ -5,11 +5,8 @@ import gc
 import psutil
 import offshoot
 import pyautogui
-import collections
 import math
 import numpy as np
-# import serpent.utilities
-# from serpent.frame_grabber import FrameGrabber
 from serpent.game_agent import GameAgent
 from serpent.input_controller import MouseButton, KeyboardKey
 from serpent.machine_learning.context_classification.context_classifiers.cnn_inception_v3_context_classifier import CNNInceptionV3ContextClassifier
@@ -28,6 +25,7 @@ ZOOM_MAIN = "main"
 ZOOM_BRAWLER = "brawler"
 ZOOM_KILL_MOVE = "kill_move"
 
+
 class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
     def __init__(self, **kwargs):
@@ -39,6 +37,9 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         self.env_name = 'DeathFingerOnePunch'
         self.window_dim = (self.game.window_geometry['height'], self.game.window_geometry['width'], 3)
+        self.downscale_img_size = (int(self.game.window_geometry['height']/10),
+                                   int(self.game.window_geometry['width']/10),
+                                   2)  # This means 1 greyscale image and 1 greyscale motion-trace image
 
         # TerminalPrinter prints a list of instructions to cmd window, but ensures there is minmal stuttering in output
         self.printer = TerminalPrinter()
@@ -60,18 +61,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             "RIGHT_LEFT": [KeyboardKey.KEY_RIGHT, KeyboardKey.KEY_LEFT],
             "LEFT_RIGHT": [KeyboardKey.KEY_LEFT, KeyboardKey.KEY_RIGHT]
         }
-
-        """
-        self.input_mapping = {
-            "NOOP": [],
-            "LEFT": [MouseButton.LEFT],
-            "RIGHT": [MouseButton.RIGHT],
-            "DOUBLE_RIGHT": [MouseButton.RIGHT, MouseButton.RIGHT],
-            "DOUBLE_LEFT": [MouseButton.LEFT, MouseButton.LEFT],
-            "RIGHT_LEFT": [MouseButton.RIGHT, MouseButton.LEFT],
-            "LEFT_RIGHT": [MouseButton.LEFT, MouseButton.RIGHT]
-        }
-        """
 
         # Action meaning for One Finger Death Punch
         self.ACTION_MEANING_OFDP = {
@@ -98,37 +87,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.epsilon = 1.0
         self.not_playing_context_counter = 0
         self.episode_time = 0
-        """
-        self.game_state = {
-            "health": collections.deque(np.full((8,), 10), maxlen=8),
-            "nb_ennemies_hit": 0,
-            "nb_miss": 0,
-            "miss_failsafe": 2,
-            # DQN variables
-            "current_run": 1,
-            "current_run_started_at": datetime.utcnow(),
-            "current_run_duration": None,
-            "current_run_steps": 0,
-            "run_reward": 0,
-            "run_future_rewards": 0,
-            "run_predicted_actions": 0,
-            "run_timestamp": datetime.utcnow(),
-            "last_run": 0,
-            "last_run_duration": 0,
-            "last_run_duration_actual": None,
-            "last_run_distance": 0.0,
-            "last_run_coins_collected": 0,
-            "record_duration": None,
-            "record_duration_actual": 0,
-            "record_run": 0,
-            "record_distance": 0.0,
-            "alive": collections.deque(np.full((8,), 4), maxlen=8),
-            "record_time_alive": dict(),
-            "random_time_alive": None,
-            "random_time_alives": list(),
-            "random_distance_travelled": 0.0
-        }
-        """
 
         print("Game agent finished initiating")
 
@@ -156,10 +114,10 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         # Setup DQN network and load from checkpoint if available
         self.agent = dqn.Agent(action_list=self.ACTION_MEANING_OFDP,
+                               state_shape=self.downscale_img_size,
                                env_name=self.env_name,
                                training=True,
-                               render=True,
-                               use_logging=False)
+                               render=True,)
 
         # Direct reference to the ANN in our agent for convenience
         self.model = self.agent.model
@@ -179,6 +137,11 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             self.make_a_move(game_frame)
             self.not_playing_context_counter = 0
             return
+        elif self.kill_count > 10000:
+            # This happens if the memory address for kill count changes for this episode
+            # and we should just ignore the episode
+            self.print_error()
+
         else:
             # Adding this code to avoid runs being ended early due to
             # context classifier getting the wrong context while playing
@@ -219,7 +182,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             # game-environment. Initialize with the first image-frame.
             # This resets the motion-tracer so the trace starts again.
             # This could also be done if end_life==True.
-            self.motion_tracer = dqn.MotionTracer(game_frame.frame)
+            self.motion_tracer = dqn.MotionTracer(image=game_frame.frame, target_size=self.downscale_img_size)
 
             # Increase the counter for the number of episodes.
             # This counter is stored inside the TensorFlow graph
@@ -280,7 +243,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                                               end_episode=False)
 
         move_time = time.time() - move_time_start
-        self.print_statistics(move_time=move_time)
+        self.print_statistics(move_time=move_time, q_values=q_values)
 
     def calculate_reward(self):
         # reward is the number of kills made - number of health points lost since last state
@@ -301,18 +264,19 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         count_states = self.model.get_count_states()
 
         # Counter for the number of episodes we have processed.
-        count_episodes = self.model.get_count_episodes()
+        # count_episodes = self.model.get_count_episodes()
 
         # The memory address is not stable and some times contain another memory pointer
         # When kill count contains a pointer we should not use this episode
-        if self.kill_count < 100000:
-            # Add the episode's reward to a list and calculate statistics.
+        if self.kill_count < 10000:
+            # Add the episode to the rest of replay memory and calculate statistics.
             # states, q_values, actions, rewards, end_episode = self.replay_memory.episode_memory.episode_end()
             self.replay_memory.add_episode_too_memory(self.episode_time)
-            self.agent.episode_rewards.append(sum(self.replay_memory.episode_memory.rewards))
 
+        # TODO: use this to check if replay memory still looks correct
         # Print the last memory states for debugging
         """
+        
         self.plot_images(self.replay_memory.states[self.replay_memory.num_used-9:],
                          self.replay_memory.kill_count[self.replay_memory.num_used-9:],
                          self.replay_memory.health[self.replay_memory.num_used-9:])
@@ -384,16 +348,16 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         self.printer.add(f"Average Last 10   Runs: "
                          f" Time: {round(self.replay_memory.episode_statistics.average_time_10, 2)}"
-                         f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_10, 0))}")
+                         f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_10, 2))}")
         self.printer.add(f"Average Last 100  Runs: "
                          f" Time: {round(self.replay_memory.episode_statistics.average_time_100, 2)}"
-                         f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_100, 0))}")
+                         f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_100, 2))}")
         self.printer.add(f"Average Last 1000 Runs: "
                          f" Time: {round(self.replay_memory.episode_statistics.average_time_1000, 2)}"
-                         f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_1000, 0))}")
+                         f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_1000, 2))}")
         self.printer.add("")
 
-    def print_statistics(self, move_time):
+    def print_statistics(self, move_time, q_values):
         episode_run_time_seconds = time.time() - self.episode_start_time
         state_count = len(self.replay_memory.episode_memory.states)
         #effective_apm = 0 if state_count else round(
@@ -406,7 +370,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add(f"AGENT DEATH FINGER ONE PUNCH THINKS:")
         self.printer.add(f"Decisions made this episode: {len(self.replay_memory.episode_memory.states)} "
                          f"\nAction: {self.ACTION_MEANING_OFDP[self.replay_memory.episode_memory.actions[-1]]}"
-                         f"\nQ_values: {np.round(self.replay_memory.episode_memory.q_values[-1], 3)} "
+                         f"\nQ_values: {np.round(q_values, 1)}" # {np.round(self.replay_memory.episode_memory.q_values[-1], 10)}"
                          f"\nQ_values: [NONE, LEFT, RIGHT, 2xLEFT, 2xRIGHT, R+L, L+R]"
                          f"\nQ_value is how good I think each move is right now")
 
@@ -427,9 +391,9 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add("")
 
         # TEMP PRINT FOR DEBUGGING
-        self.printer.add(f"Computing move in: {round(move_time, 3)} seconds")
-        self.printer.add(f"Effective decisions per second: {round(effective_apm, 2)}")
-        #self.printer.add(f"Episode clock time: "
+        # self.printer.add(f"Computing move in: {round(move_time, 3)} seconds")
+        # self.printer.add(f"Effective decisions per second: {round(effective_apm, 2)}")
+        # self.printer.add(f"Episode clock time: "
         #                 f"{self.episode_time // 3600} hours, "
         #                 f"{(self.episode_time // 60) % 60} minutes, "
         #                 f"{self.episode_time % 60} seconds")
@@ -451,6 +415,13 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         # Finally print all above to the screen as one message (Less flickering)
         self.printer.flush()
 
+    def print_error(self):
+        self.add_printer_head()
+        self.printer.add("Memory address changed for this run")
+        self.printer.add("Agent will not be playing until kill count is correct again")
+        self.printer.add("This should be resolved within one or two runs")
+        self.printer.flush()
+
     def train_dqn(self):
         # Counter for the number of states we have processed.
         # This is stored in the TensorFlow graph so it can be
@@ -469,12 +440,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
             # Update all Q-values in the replay-memory through a backwards-sweep.
             self.replay_memory.update_all_q_values()
-
-            # Log statistics for the Q-values to file.
-            if self.agent.use_logging:
-                self.agent.log_q_values.write(count_episodes=count_episodes,
-                                              count_states=count_states,
-                                              q_values=self.replay_memory.q_values)
 
             # Get the control parameters for optimization of the Neural Network.
             # These are changed linearly depending on the state-counter.
@@ -765,7 +730,12 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         if health_last[0, 0, 0] > 200:
             current_health += 1
 
-        return current_health
+        if current_health == 0 and self.health != 1:
+            # At times the zoom level or other factors can affent how health is read
+            # This code avoids that rounds are ended cue to this issue
+            return self.health
+        else:
+            return current_health
 
     """
     def update_bonus_mode_and_hits(self, game_frame):
