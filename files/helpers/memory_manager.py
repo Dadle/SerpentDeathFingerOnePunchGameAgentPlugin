@@ -44,8 +44,8 @@ class MemoryManager:
         Read the kill count variabel from memory for use as a reward
         :return: Kill count as int:
         """
-        # Pick the memory address that can be overwriten manually. That is the stable address
-        kill_count_memory_address = 0x005FB680
+        # Pick the memory address that is be overwriten automatically. This is the most stable address
+        kill_count_memory_address = 0x011FB640
         kill_count = c_int()
         self.ReadProcessMemory(self.processHandle, kill_count_memory_address, byref(kill_count), 4,
                                byref(self.numRead))  # This works somewhat direct address 0x12FB840

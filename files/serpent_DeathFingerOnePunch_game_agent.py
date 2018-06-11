@@ -116,7 +116,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.agent = dqn.Agent(action_list=self.ACTION_MEANING_OFDP,
                                state_shape=self.downscale_img_size,
                                env_name=self.env_name,
-                               training=True,
+                               training=False,  # TODO ----------------> switch and remember to set training again
                                render=True,)
 
         # Direct reference to the ANN in our agent for convenience
@@ -216,7 +216,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         action_meaning = self.ACTION_MEANING_OFDP[action]
         #print("MOVE:", action_meaning)
         buttons = self.input_mapping[action_meaning]
-        #print("Clicking button:", buttons)
+        #print(f"Clicking button: {buttons}")
 
         #test_time_start = time.time()
         self.input_controller.handle_keys(key_collection=buttons)
@@ -239,8 +239,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                                               reward=self.calculate_reward(),
                                               kill_count=self.kill_count,
                                               miss_count=self.miss_count,
-                                              health=self.health,
-                                              end_episode=False)
+                                              health=self.health)
 
         move_time = time.time() - move_time_start
         self.print_statistics(move_time=move_time, q_values=q_values)
@@ -254,7 +253,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             #reward -= self.miss_count - self.replay_memory.episode_memory.miss_count[-1]
         return reward
 
-    def end_episde(self):
+    def end_episode(self):
         # Calculated survival time for current episode in seconds
         self.episode_time = time.time() - self.episode_start_time
 
@@ -263,15 +262,14 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         # saved and reloaded along with the checkpoint.
         count_states = self.model.get_count_states()
 
-        # Counter for the number of episodes we have processed.
-        # count_episodes = self.model.get_count_episodes()
+        self.add_printer_head()
 
         # The memory address is not stable and some times contain another memory pointer
         # When kill count contains a pointer we should not use this episode
-        if self.kill_count < 10000:
+        if self.kill_count < 1000:
             # Add the episode to the rest of replay memory and calculate statistics.
             # states, q_values, actions, rewards, end_episode = self.replay_memory.episode_memory.episode_end()
-            self.replay_memory.add_episode_too_memory(self.episode_time)
+            self.replay_memory.add_episode_too_memory(self.episode_time, self.printer)
 
         # TODO: use this to check if replay memory still looks correct
         # Print the last memory states for debugging
@@ -281,23 +279,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                          self.replay_memory.kill_count[self.replay_memory.num_used-9:],
                          self.replay_memory.health[self.replay_memory.num_used-9:])
         """
-
-        """
-        # Mean reward of the last 30 episodes.
-        if len(self.agent.episode_rewards) == 0:
-            # The list of rewards is empty.
-            reward_mean = 0.0
-        else:
-            reward_mean = np.mean(self.agent.episode_rewards[-30:])
-
-        if self.agent.training:
-            # Print reward to screen.
-            msg = "{0:4}:{1}\t Epsilon: {2:4.2f}\t Reward: {3:.1f}\t Episode Mean: {4:.1f}"
-            print(msg.format(count_episodes, count_states, self.epsilon,
-                             self.replay_memory.episode_statistics.last_episode_time, reward_mean))
-        """
-
-        self.add_printer_head()
 
         #self.printer.add(f"")
         #self.printer.add(f"Max q_value: {self.replay_memory.q_values.max(axis=1)}")
@@ -310,11 +291,14 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add(f"Model trains when replay memory is more than "
                          f"{int(self.agent.replay_fraction.get_value(iteration=count_states) * 100)}% full")
         self.printer.add("")
+        #self.printer.add(f"Number of end_episode flags in memory: "
+        #                 f"{np.sum(self.replay_memory.end_episode)}")
 
         self.printer.flush()
 
-        if self.replay_memory.episode_statistics.num_episodes_completed % 10 == 0 \
-                and self.replay_memory.episode_statistics.num_episodes_completed > 0:
+        if self.replay_memory.episode_statistics.num_episodes_completed % 25 == 0 \
+                and self.replay_memory.episode_statistics.num_episodes_completed > 0\
+                and self.agent.training:
             print("Saving replay memory checkpoint, please give me a minute...")
             self.replay_memory.store_memory_checkpoint()
             print("Finished storing replay memory for agent", self.env_name)
@@ -326,7 +310,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         # Perform garbage collection after each episode to avoid memory leakage over time
         collected_garbage = gc.collect()
-        print("Garbage collector collected:", collected_garbage)
+        #print("Garbage collector collected:", collected_garbage)
 
     def add_printer_head(self):
         run_time = datetime.now() - self.started_at
@@ -371,7 +355,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add(f"Decisions made this episode: {len(self.replay_memory.episode_memory.states)} "
                          f"\nAction: {self.ACTION_MEANING_OFDP[self.replay_memory.episode_memory.actions[-1]]}"
                          f"\nQ_values: {np.round(q_values, 1)}" # {np.round(self.replay_memory.episode_memory.q_values[-1], 10)}"
-                         f"\nQ_values: [NONE, LEFT, RIGHT, 2xLEFT, 2xRIGHT, R+L, L+R]"
+                         f"\nQ_values: [NOOP, LEFT, RIGHT, 2xLEFT, 2xRIGHT, R+L, L+R]"
                          f"\nQ_value is how good I think each move is right now")
 
         #current_reward = self.calculate_reward()
@@ -383,6 +367,8 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             reward_feedback = 'punished'
 
         self.printer.add("")
+        agent_mode = "training" if self.agent.training is True else "testing"
+        self.printer.add(f"Agent is running in {agent_mode} mode")
         self.printer.add(f"Agent will be: {reward_feedback}")
         self.printer.add(f"Kill count   : {self.kill_count}")
         #self.printer.add(f"Miss count   : {self.miss_count}")
@@ -391,8 +377,8 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add("")
 
         # TEMP PRINT FOR DEBUGGING
-        # self.printer.add(f"Computing move in: {round(move_time, 3)} seconds")
-        # self.printer.add(f"Effective decisions per second: {round(effective_apm, 2)}")
+        self.printer.add(f"Computing move in: {round(move_time, 3)} seconds")
+        self.printer.add(f"Effective decisions per second: {round(effective_apm, 2)}")
         # self.printer.add(f"Episode clock time: "
         #                 f"{self.episode_time // 3600} hours, "
         #                 f"{(self.episode_time // 60) % 60} minutes, "
@@ -428,18 +414,25 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         # saved and reloaded along with the checkpoint.
         count_states = self.model.get_count_states()
 
-        # Counter for the number of episodes we have processed.
-        count_episodes = self.model.get_count_episodes()
-
         # How much of the replay-memory should be used.
-        use_fraction = 0.1  # self.agent.replay_fraction.get_value(iteration=count_states)
+        use_fraction = self.agent.replay_fraction.get_value(iteration=count_states)
 
         # When the replay-memory is sufficiently full.
         if self.replay_memory.is_full() \
                 or self.replay_memory.used_fraction() > use_fraction:
 
             # Update all Q-values in the replay-memory through a backwards-sweep.
-            self.replay_memory.update_all_q_values()
+            # TODO: Swapped this approach with one only updating q_values for each episode when it is over
+            # The idea is that the reward for each episode will not change after initial evaluation.
+            # The reward will not change once an episode is completed, and we do not calculate
+            # new q_values after an episode is finished, so why would we run through previous epiisodes
+            # and growing the action values?
+            # Answer: Because the Q values are growing due to the rolling out of reards backwards in time
+            #         A Reward added on to the old q_value will grow the resulting action value we use for training
+            #         to be higher than any previous Q value. This means Q values grow over time and are inherently
+            #         unstable. We need to update all q_values to ensure they are on the correct scale,
+            #         while ensuring that they do not grow out of control by only using a small batch size for training
+            # self.replay_memory.update_all_q_values(self.printer)
 
             # Get the control parameters for optimization of the Neural Network.
             # These are changed linearly depending on the state-counter.
@@ -656,7 +649,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
     def do_game_end_highscore_action(self, context):
         if context == "ofdp_game_end_highscore":
             self.survival_end_time = time.time()
-            self.end_episde()
+            self.end_episode()
             #self.train_player_model()
             #self.train_dqn()
             print("NEW HIGHSCORE!")
@@ -683,7 +676,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
     def do_game_end_score_action(self, context):
         if context == "ofdp_game_end_score":
             self.episode_end_time = time.time()
-            self.end_episde()
+            self.end_episode()
             #self.train_player_model()
             #self.train_dqn()
             #print("I'M... dead.")

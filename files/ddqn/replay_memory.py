@@ -12,7 +12,8 @@ class ReplayMemory:
     is more diverse when sampled over thousands of different states.
     """
 
-    def __init__(self, size, num_actions, state_shape, env_name, checkpoint_dir, discount_factor=0.8):
+    def __init__(self, size, num_actions, state_shape, env_name, checkpoint_dir,
+                 discount_factor=0.8, error_threshold=0.1):
         """
 
         :param size:
@@ -34,8 +35,14 @@ class ReplayMemory:
         # Name of this game agent, only used for checkpointing and naming files on disk
         self.env_name = env_name
 
+        # Discount-factor for calculating Q-values.
+        self.discount_factor = discount_factor
+
+        # Threshold for splitting between low and high estimation errors.
+        self.error_threshold = error_threshold
+
         # Initialize a first episode memory
-        self.episode_memory = self.EpisodeReplayMemory()
+        self.episode_memory = self.EpisodeReplayMemory(self.discount_factor, self.error_threshold)
 
         # Object keeping track of statistics across episodes for printing
         self.episode_statistics = self.EpisodeStatistics()
@@ -77,14 +84,8 @@ class ReplayMemory:
         # Capacity of the replay-memory as the number of states.
         self.size = size
 
-        # Discount-factor for calculating Q-values.
-        self.discount_factor = discount_factor
-
         # Reset the number of used states in the replay-memory.
         self.num_used = 0
-
-        # Threshold for splitting between low and high estimation errors.
-        self.error_threshold = 0.1
 
         # The number of times this object has been stored to file
         self.store_count = 0
@@ -137,18 +138,32 @@ class ReplayMemory:
     def reset(self):
         """Reset the replay-memory so it is empty."""
         self.num_used = 0
-        self.episode_memory = self.EpisodeReplayMemory()
+        self.episode_memory = self.EpisodeReplayMemory(self.discount_factor, self.error_threshold)
         self.episode_statistics = self.EpisodeStatistics()
 
     def reset_episode(self):
         """Reset the episode replay-memory so it is ready for a new episode."""
-        self.episode_memory = self.EpisodeReplayMemory()
+        self.episode_memory = self.EpisodeReplayMemory(self.discount_factor, self.error_threshold)
 
-    def add_episode_too_memory(self, episode_time_seconds):
+    def add_episode_too_memory(self, episode_time_seconds, printer):
         """
         Adds the completed current episode memory to the replay-memory as training material
         """
+        if len(self.episode_memory.kill_count) > 0:
+            # With current implementation memory region for kill count is hard coded.
+            # This region is some times swithced for short periods of time.
+            # This code skips episodes where the memory region is wrong
+            if self.episode_memory.kill_count[-1] > 10000:
+                print("Kill count memory region is wrong. Not adding this episode to memory!")
+                print("Memory region should reset itself in a few rounds restoring normal operation. "
+                      "\nPlease stand by.")
+                self.reset_episode()
+                return
 
+        # If episode checks out OK it is added to the rest of the replay memory
+        print("Adding episode to replay memory")
+
+        self.episode_memory.end_episode_updates(printer)
         self.episode_statistics.update_statistics(self.episode_memory, episode_time_seconds)
 
         # While adding episode to replay memory we need to calculate the rewards
@@ -163,8 +178,10 @@ class ReplayMemory:
                 self.rewards = np.concatenate([self.rewards[1:], [self.episode_memory.rewards[index]]])
                 self.kill_count = np.concatenate([self.kill_count[1:], [self.episode_memory.kill_count[index]]])
                 self.miss_count = np.concatenate([self.miss_count[1:], [self.episode_memory.miss_count[index]]])
-                self.health[k] = np.concatenate([self.kill_count[1:], [self.episode_memory.health[index]]])
+                self.health = np.concatenate([self.health[1:], [self.episode_memory.health[index]]])
                 self.end_episode = np.concatenate([self.end_episode[1:], [self.episode_memory.end_episode[index]]])
+                self.estimation_errors = np.concatenate([self.estimation_errors[1:],
+                                                         [self.episode_memory.estimation_errors[index]]])
                 break
             else:
                 # If there is still room in replay memory, add the episode at the end of the currently used memory
@@ -180,6 +197,7 @@ class ReplayMemory:
                 self.miss_count[k] = self.episode_memory.miss_count[index]
                 self.health[k] = self.episode_memory.health[index]
                 self.end_episode[k] = self.episode_memory.end_episode[index]
+                self.estimation_errors[k] = self.episode_memory.estimation_errors[index]
 
         self.reset_episode()
 
@@ -241,7 +259,7 @@ class ReplayMemory:
             # the training of the Neural Network.
             self.rewards = np.concatenate([self.rewards[1:], [np.clip(reward, -1.0, 1.0)]])
 
-    def update_all_q_values(self):
+    def update_all_q_values(self, printer):
         """
         Update all Q-values in the replay-memory.
 
@@ -264,7 +282,7 @@ class ReplayMemory:
         for k in reversed(range(self.num_used - 1)):
             # Get the data for the k'th state in the replay-memory.
             action = self.actions[k]
-            reward = self.rewards[k]
+            reward = self.rewards
             end_episode = self.end_episode[k]
 
             # Calculate the Q-value for the action that was taken in this state.
@@ -275,14 +293,14 @@ class ReplayMemory:
                 # Q-value is defined as the discounted value of all future game
                 # steps in a single life of the agent. When the life has ended,
                 # there will be no future steps.
-                action_value = reward
+                action_value = reward[k]
             else:
                 # Otherwise the value of taking the action is the reward that
                 # we have observed plus the discounted value of future rewards
                 # from continuing the game. We use the estimated Q-values for
                 # the following state and take the maximum, because we will
                 # generally take the action that has the highest Q-value.
-                action_value = reward + self.discount_factor * np.max(self.q_values[k + 1])
+                action_value = reward[k+1] + self.discount_factor * np.max(self.q_values[k + 1])
 
             # Error of the Q-value that was estimated using the Neural Network.
             self.estimation_errors[k] = abs(action_value - self.q_values[k, action])
@@ -290,7 +308,7 @@ class ReplayMemory:
             # Update the Q-value with the better estimate.
             self.q_values[k, action] = action_value
 
-        self.print_statistics()
+        self.print_statistics(printer)
 
     def prepare_sampling_prob(self, batch_size=128):
         """
@@ -444,32 +462,57 @@ class ReplayMemory:
         # Newline.
         print()
 
-    def print_statistics(self):
+    def print_statistics(self, printer):
         """Print statistics for the contents of the replay-memory."""
 
-        print("Replay-memory statistics:")
+        printer.add("Replay-memory statistics:")
+
+        episode_lenghts = []
+        episode_rewards = []
+
+        episode_start_idx = 0
+        for idx, flag in enumerate(self.end_episode):
+            if flag:
+                episode_lenghts.append(idx-episode_start_idx)
+                episode_rewards.append(sum(self.rewards[episode_start_idx:idx]))
+                episode_start_idx = idx+1
+
+        printer.add(f"Number of episodes: {len(episode_lenghts)}")
+        printer.add(f"last end episode flag: {episode_start_idx-1}")
+
+        # Print statistics for the episodes that are contained in replay memory.
+        msg = "\tEpisode length are min: {0:5.2f}, mean: {1:5.2f}, max: {2:5.2f}"
+        printer.add(msg.format(np.min(episode_lenghts),
+                               np.mean(episode_lenghts),
+                               np.max(episode_lenghts)))
+
+        # Print statistics for the episodes that are contained in replay memory.
+        msg = "\tEpisode rewards are min: {0:5.2f}, mean: {1:5.2f}, max: {2:5.2f}"
+        printer.add(msg.format(np.min(episode_rewards),
+                               np.mean(episode_rewards),
+                               np.max(episode_rewards)))
 
         # Print statistics for the Q-values before they were updated
         # in update_all_q_values().
         msg = "\tQ-values Before, Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
-        print(msg.format(np.min(self.q_values_old),
-                         np.mean(self.q_values_old),
-                         np.max(self.q_values_old)))
+        printer.add(msg.format(np.min(self.q_values_old),
+                               np.mean(self.q_values_old),
+                               np.max(self.q_values_old)))
 
         # Print statistics for the Q-values after they were updated
         # in update_all_q_values().
         msg = "\tQ-values After,  Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
-        print(msg.format(np.min(self.q_values),
-                         np.mean(self.q_values),
-                         np.max(self.q_values)))
+        printer.add(msg.format(np.min(self.q_values),
+                               np.mean(self.q_values),
+                               np.max(self.q_values)))
 
         # Print statistics for the difference in Q-values before and
         # after the update in update_all_q_values().
         q_dif = self.q_values - self.q_values_old
         msg = "\tQ-values Diff.,  Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
-        print(msg.format(np.min(q_dif),
-                         np.mean(q_dif),
-                         np.max(q_dif)))
+        printer.add(msg.format(np.min(q_dif),
+                               np.mean(q_dif),
+                               np.max(q_dif)))
 
         # Print statistics for the number of large estimation errors.
         # Don't use the estimation error for the last state in the memory,
@@ -477,18 +520,21 @@ class ReplayMemory:
         err = self.estimation_errors[:-1]
         err_count = np.count_nonzero(err > self.error_threshold)
         msg = "\tNumber of large errors > {0}: {1} / {2} ({3:.1%})"
-        print(msg.format(self.error_threshold, err_count,
-                         self.num_used, err_count / self.num_used))
+        printer.add(msg.format(self.error_threshold, err_count,
+                               self.num_used, err_count / self.num_used))
 
     class EpisodeReplayMemory:
         """
         Episode replay memory stores the states for an episode until we can calculate rewards and add the memory
         to the historic replay memory and use it for training
         """
-        def __init__(self):
+        def __init__(self, discount_factor, error_threshold):
             """
             The initialization is the same as for ReplayMemory,
             but uses dynamic arrays since we do not know the length of an episode
+
+            :param discount_factor:
+                Discount-factor used for updating Q-values.
             """
 
             # Array for the previous states of the game-environment.
@@ -518,6 +564,18 @@ class ReplayMemory:
 
             # Whether the episode had ended (aka. game over) in each state.
             self.end_episode = []
+
+            # Estimation errors for the Q-values. This is used to balance
+            # the sampling of batches for training the Neural Network,
+            # so we get a balanced combination of states with high and low
+            # estimation errors for their Q-values.
+            self.estimation_errors = []
+
+            # Discount-factor used for updating Q-values.
+            self.discount_factor = discount_factor
+
+            # Threshold for splitting between low and high estimation errors.
+            self.error_threshold = error_threshold
 
         def reset(self):
             """Reset the episode replay-memory so it is empty."""
@@ -550,9 +608,15 @@ class ReplayMemory:
             # Whether the episode had ended (aka. game over) in each state.
             self.end_episode = []
 
+            # Estimation errors for the Q-values. This is used to balance
+            # the sampling of batches for training the Neural Network,
+            # so we get a balanced combination of states with high and low
+            # estimation errors for their Q-values.
+            self.estimation_errors = []
+
             self.num_used = 0
 
-        def add(self, state, q_values, action, reward, kill_count, miss_count, health, end_episode):
+        def add(self, state, q_values, action, reward, kill_count, miss_count, health):
             """
             Add an observed state from the game-environment, along with the
             estimated Q-values, action taken, etc.
@@ -572,9 +636,6 @@ class ReplayMemory:
                 Number of times player has missed so far this run
             :param health:
                 Number of health points for player. Int between 0 and 10
-            :param end_episode:
-                Boolean whether the agent has lost all lives aka. game over
-                aka. end of episode.
             """
 
             # set size of episode memory
@@ -588,45 +649,87 @@ class ReplayMemory:
             self.kill_count.append(kill_count)
             self.miss_count.append(miss_count)
             self.health.append(health)
-            self.end_episode.append(end_episode)
+            # Boolean whether the agent has lost all lives aka. game over aka. end of episode.
+            # The last flag in each episode memory is set to True while
+            # adding episode memory to the rest of replay memory
+            self.end_episode.append(False)
 
             # Note that the reward is limited. This is done to stabilize
             # the training of the Neural Network.
             #self.rewards[k] = np.clip(reward, -1.0, 1.0)
 
-        def episode_end(self):
+        def update_episode_q_values(self):
             """
-            When the episode ends we know the final score and can run the
-            episode again to calculate the reward per state
+            Update all Q-values in the replay-memory.
 
-            :return: states:
-                Sequential list of the states totaling the episode
-            :return: q_values:
-                Sequential list of q_value lists calculated per state
-            :return: actions:
-                A sequential list of the action taken for each state
-            :return: rewards:
-                A list fot he rewards for each state throughout the episode
-            :return: end_episode:
-                True if the entry is the last index of the episode, False otherwise
+            When states and Q-values are added to the replay-memory, the
+            Q-values have been estimated by the Neural Network. But we now
+            have more data available that we can use to improve the estimated
+            Q-values, because we now know which actions were taken and the
+            observed rewards. We sweep backwards through the entire replay-memory
+            to use the observed data to improve the estimated Q-values.
             """
 
-            # The end reward for the episode is the number of states we managed to store while playing
-            survived_num_states = len(self.states)
-            self.end_episode[-1] = True
+            # Copy old Q-values so we can print their statistics later.
+            # Note that the contents of the arrays are copied.
+            self.q_values_old[:] = self.q_values[:]
 
-            """
-            # We generate one reward per state stored during the episode
-            for state_number in range(survived_num_states-1):
-                # We normalize scores between 1 and 0 where 1 is correct and 0 means you died because of the move
-                # The reward is larges for the first state and closest to 0 for the last state
-                # The last move killed you after all
-                self.rewards.append(self.reward(state_number, survived_num_states))
-            """
+            # Now that we know how long the entire episode is we can initialize the estimation errors array
+            self.estimation_errors = np.zeros(shape=len(self.states), dtype=np.float)
 
-            self.print_episode_statistics()
+            # Process the replay-memory backwards and update the Q-values.
+            # This loop could be implemented entirely in NumPy for higher speed,
+            # but it is probably only a small fraction of the overall time usage,
+            # and it is much easier to understand when implemented like this.
+            for k in reversed(range(len(self.states))):
+                # Get the data for the k'th state in the replay-memory.
+                action = self.actions[k]
+                reward = self.rewards[k]
+                end_episode = self.end_episode[k]
 
-            return self.states, self.q_values, self.actions, self.rewards, self.kill_count, self.miss_count, self.health, self.end_episode
+                # Calculate the Q-value for the action that was taken in this state.
+                if end_episode:
+                    # If the agent lost a life or it was game over / end of episode,
+                    # then the value of taking the given action is just the reward
+                    # that was observed in this single step. This is because the
+                    # Q-value is defined as the discounted value of all future game
+                    # steps in a single life of the agent. When the life has ended,
+                    # there will be no future steps.
+                    action_value = reward
+                else:
+                    # Otherwise the value of taking the action is the reward that
+                    # we have observed plus the discounted value of future rewards
+                    # from continuing the game. We use the estimated Q-values for
+                    # the following state and take the maximum, because we will
+                    # generally take the action that has the highest Q-value.
+                    action_value = reward + self.discount_factor * np.max(self.q_values[k + 1])
+
+                # Error of the Q-value that was estimated using the Neural Network.
+                self.estimation_errors[k] = abs(action_value - self.q_values[k][action])
+
+                # Update the Q-value with the better estimate.
+                self.q_values[k][action] = action_value
+
+        def end_episode_updates(self, printer):
+            # printer.add(f"Number of states: {len(self.states)}")
+            if len(self.states) > 0:
+                # At the end of each episode go through all q_values for the episode and set
+                # the correct action values based on experienced rewards.
+                # This will take each reward and punishment and spread it backwards in time to give
+                # an estimated value for each action taken known as an action value.
+
+                self.end_episode[-1] = True
+                # printer.add(f"episode end flag: {self.end_episode[-1]}")
+
+                # TODO: Consider if it is possible to get away with only calculating action values once
+                # Having growing Q values over time seems strange
+                # We could focus on which action is most likely the best one for this state (likelihood)
+                # And not what predicted reward we could get from this action (prediction).
+                # Prediction depends on all future actions as well to calculate cumulative reward
+                self.update_episode_q_values()
+                self.print_episode_q_statistics(printer)
+
+
 
         @staticmethod
         def reward(state_number, episode_length):
@@ -646,13 +749,44 @@ class ReplayMemory:
             # print(f"CALCULATED REWARD: {(1 - (1 / episode_length)) ** state_number}")
             return (1 - (1 / episode_length)) ** state_number
 
-        def print_episode_statistics(self):
+        def print_episode_q_statistics(self, printer):
             """Print statistics for the episode in the episode replay-memory."""
 
-            print("Episode replay-memory statistics:")
+            printer.add("Episode replay-memory statistics:")
 
             # Print episode length
-            print("\tEpisode lasted", len(self.states), "states resulting in total reward of", sum(self.rewards))
+            printer.add(f"\tEpisode lasted {len(self.states)} states resulting in total reward of {sum(self.rewards)}")
+
+            # Print statistics for the Q-values before they were updated
+            # in update_all_q_values().
+            msg = "\tQ-values Before, Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
+            printer.add(msg.format(np.min(self.q_values_old),
+                                   np.mean(self.q_values_old),
+                                   np.max(self.q_values_old)))
+
+            # Print statistics for the Q-values after they were updated
+            # in update_all_q_values().
+            msg = "\tQ-values After,  Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
+            printer.add(msg.format(np.min(self.q_values),
+                                   np.mean(self.q_values),
+                                   np.max(self.q_values)))
+
+            # Print statistics for the difference in Q-values before and
+            # after the update in update_all_q_values().
+            q_dif = np.array(self.q_values) - np.array(self.q_values_old)
+            msg = "\tQ-values Diff.,  Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
+            printer.add(msg.format(np.min(q_dif),
+                                   np.mean(q_dif),
+                                   np.max(q_dif)))
+
+            # Print statistics for the number of large estimation errors.
+            # Don't use the estimation error for the last state in the memory,
+            # because its Q-values have not been updated.
+            err = self.estimation_errors[:-1]
+            err_count = np.count_nonzero(err > self.error_threshold)
+            msg = "\tNumber of large errors > {0}: {1} / {2} ({3:.1%})"
+            printer.add(msg.format(self.error_threshold, err_count,
+                                   self.num_used, err_count / self.num_used))
 
     class EpisodeStatistics:
         """
@@ -678,7 +812,7 @@ class ReplayMemory:
             self.average_kill_count_100 = 0
             self.average_kill_count_1000 = 0
 
-            self.num_episodes_completed = 0
+            self.num_episodes_completed = 1
             self.last_episode_time = 0
             self.last_episode_kill_count = 0
 

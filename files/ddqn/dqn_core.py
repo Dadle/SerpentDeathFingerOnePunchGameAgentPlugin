@@ -722,8 +722,9 @@ class NeuralNetwork:
         # Note the learning-rate is a placeholder variable so we can
         # lower the learning-rate as optimization progresses.
         # -- Original optimizer --
-        # self.optimizer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
-        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
+        self.optimizer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
+        # -- Alternative optimizer --
+        # self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
 
         # Used for saving and loading checkpoints.
         self.saver = tf.train.Saver()
@@ -796,8 +797,8 @@ class NeuralNetwork:
         return values
 
     def optimize(self, min_epochs=1.0, max_epochs=10,
-                 batch_size=128, loss_limit=0.0015,
-                 learning_rate=1e-7):
+                 batch_size=32, loss_limit=0.0015,
+                 learning_rate=1e-5):
         """
         Optimize the Neural Network by sampling states and Q-values
         from the replay-memory.
@@ -873,18 +874,21 @@ class NeuralNetwork:
             # Print training status.
             self.printer.add("Capgemini Intelligent Automation - Death Finger One Punch agent")
             self.printer.add("Reinforcement Learning: Training a DQN Agent")
-            self.printer.add("")
+            self.printer.empty_line()
+            self.replay_memory.print_statistics(self.printer)
+            self.printer.empty_line()
             self.printer.add("Optimizing Neural Network to better estimate Q-values:")
             self.printer.add("\tLearning-rate: {0:.1e}".format(learning_rate))
             self.printer.add("\tLoss-limit: {0:.3f}".format(loss_limit))
             self.printer.add("\tMax epochs: {0:.1f}".format(max_epochs))
             self.printer.empty_line()
+            self.printer.add("Training status")
             pct_epoch = i / iterations_per_epoch
-            self.printer.add(f"Iteration:             {i} ({round(pct_epoch, 1)} epoch) "
-                             f"\nBatch loss:            {round(loss_val, 2)} "
-                             f"\nBatch loss magnitude:  {len(str(int(loss_val)))}"
-                             f"\nMean loss:             {round(loss_mean, 2)}"
-                             f"\nMean loss magnitude:   {len(str(int(loss_mean)))}")
+            self.printer.add(f"\tIteration:             {i} ({round(pct_epoch, 1)} epoch) "
+                             f"\n\tBatch loss:            {round(loss_val, 2)} "
+                             f"\n\tBatch loss magnitude:  {len(str(int(loss_val)))}"
+                             f"\n\tMean loss:             {round(loss_mean, 2)}"
+                             f"\n\tMean loss magnitude:   {len(str(int(loss_mean)))}")
             self.printer.flush()
 
             # Stop the optimization if we have performed the required number
@@ -1028,81 +1032,71 @@ class Agent:
         # Epsilon-greedy policy for selecting an action from the Q-values.
         # During training the epsilon is decreased linearly over the given
         # number of iterations. During testing the fixed epsilon is used.
-        self.epsilon_greedy = EpsilonGreedy(start_value=1.0,
-                                            end_value=0.1,
-                                            num_iterations=1e6,
+        self.epsilon_greedy = EpsilonGreedy(start_value=0.5,
+                                            end_value=0.05,
+                                            num_iterations=1e4,
                                             num_actions=self.num_actions,
                                             epsilon_testing=0.01)
 
-        if self.training:
-            # The following control-signals are only used during training.
+        # The following control-signals are only used during training.
 
-            # The learning-rate for the optimizer decreases linearly.
-            self.learning_rate_control = LinearControlSignal(start_value=1e-6,
-                                                             end_value=1e-11,
-                                                             num_iterations=5e6)
+        # The learning-rate for the optimizer decreases linearly.
+        self.learning_rate_control = LinearControlSignal(start_value=1e-5,
+                                                         end_value=1e-11,
+                                                         num_iterations=5e6)
 
-            # The loss-limit is used to abort the optimization whenever the
-            # mean batch-loss falls below this limit.
-            self.loss_limit_control = LinearControlSignal(start_value=0.1,
-                                                          end_value=0.015,
-                                                          num_iterations=5e6)
+        # The loss-limit is used to abort the optimization whenever the
+        # mean batch-loss falls below this limit.
+        self.loss_limit_control = LinearControlSignal(start_value=0.1,
+                                                      end_value=0.015,
+                                                      num_iterations=5e6)
 
-            # The maximum number of epochs to perform during optimization.
-            # This is increased from 5 to 10 epochs, because it was found for
-            # the Breakout-game that too many epochs could be harmful early
-            # in the training, as it might cause over-fitting.
-            # Later in the training we would occasionally get rare events
-            # and would therefore have to optimize for more iterations
-            # because the learning-rate had been decreased.
-            self.max_epochs_control = LinearControlSignal(start_value=7.0,
-                                                          end_value=20.0,
-                                                          num_iterations=5e6)
+        # The maximum number of epochs to perform during optimization.
+        # This is increased from 5 to 10 epochs, because it was found for
+        # the Breakout-game that too many epochs could be harmful early
+        # in the training, as it might cause over-fitting.
+        # Later in the training we would occasionally get rare events
+        # and would therefore have to optimize for more iterations
+        # because the learning-rate had been decreased.
+        self.max_epochs_control = LinearControlSignal(start_value=5.0,
+                                                      end_value=20.0,
+                                                      num_iterations=5e6)
 
-            # The fraction of the replay-memory to be used.
-            # Early in the training, we want to optimize more frequently
-            # so the Neural Network is trained faster and the Q-values
-            # are learned and updated more often. Later in the training,
-            # we need more samples in the replay-memory to have sufficient
-            # diversity, otherwise the Neural Network will over-fit.
-            self.replay_fraction = LinearControlSignal(start_value=0.1,
-                                                       end_value=1.0,
-                                                       num_iterations=5e6)
-        else:
-            # We set these objects to None when they will not be used.
-            self.learning_rate_control = None
-            self.loss_limit_control = None
-            self.max_epochs_control = None
-            self.replay_fraction = None
+        # The fraction of the replay-memory to be used.
+        # Early in the training, we want to optimize more frequently
+        # so the Neural Network is trained faster and the Q-values
+        # are learned and updated more often. Later in the training,
+        # we need more samples in the replay-memory to have sufficient
+        # diversity, otherwise the Neural Network will over-fit.
+        self.replay_fraction = LinearControlSignal(start_value=0.1,
+                                                   end_value=1.0,
+                                                   num_iterations=5e6)
 
-        if self.training:
-            # We only create the replay-memory when we are training the agent,
-            # because it requires a lot of RAM. The image-frames from the
-            # game-environment are resized to 105 x 80 pixels gray-scale,
-            # and each state has 2 channels (one for the recent image-frame
-            # of the game-environment, and one for the motion-trace).
-            # Each pixel is 1 byte, so this replay-memory needs more than
-            # 3 GB RAM (105 x 80 x 2 x 200000 bytes).
 
+        # Because it requires a lot of RAM. The image-frames from the
+        # game-environment are resized to 105 x 80 pixels gray-scale,
+        # and each state has 2 channels (one for the recent image-frame
+        # of the game-environment, and one for the motion-trace).
+        # Each pixel is 1 byte, so this replay-memory needs more than
+        # 3 GB RAM (105 x 80 x 2 x 200000 bytes).
+
+        print("***************************************************************")
+        print("Trying to load replay memory from checkpoint...")
+        self.replay_memory = ReplayMemory.load_memory_checkpoint(self.env_name, checkpoint_dir)
+
+        if self.replay_memory is not None:
             print("***************************************************************")
-            print("Trying to load replay memory from checkpoint...")
-            self.replay_memory = ReplayMemory.load_memory_checkpoint(self.env_name, checkpoint_dir)
-
-            if self.replay_memory is not None:
-                print("***************************************************************")
-                print("Loaded replay memory for agent", self.env_name, "from checkpoint file")
-                print("***************************************************************")
-            else:
-                print("***************************************************************")
-                print("Unable to load existing replay memory, creating a new one")
-                print("***************************************************************")
-                self.replay_memory = ReplayMemory(size=200000,
-                                                  num_actions=self.num_actions,
-                                                  state_shape=self.state_shape,
-                                                  env_name=self.env_name,
-                                                  checkpoint_dir=checkpoint_dir)
+            print("Loaded replay memory for agent", self.env_name, "from checkpoint file")
+            print("***************************************************************")
         else:
-            self.replay_memory = None
+            print("***************************************************************")
+            print("Unable to load existing replay memory, creating a new one")
+            print("***************************************************************")
+            self.replay_memory = ReplayMemory(size=200000,
+                                              num_actions=self.num_actions,
+                                              state_shape=self.state_shape,
+                                              env_name=self.env_name,
+                                              checkpoint_dir=checkpoint_dir)
 
         # Create the Neural Network used for estimating Q-values.
         self.model = NeuralNetwork(num_actions=self.num_actions,
