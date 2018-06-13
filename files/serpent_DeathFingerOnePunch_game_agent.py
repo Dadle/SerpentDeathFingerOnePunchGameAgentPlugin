@@ -116,7 +116,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.agent = dqn.Agent(action_list=self.ACTION_MEANING_OFDP,
                                state_shape=self.downscale_img_size,
                                env_name=self.env_name,
-                               training=False,  # TODO ----------------> switch and remember to set training again
+                               training=True,  # TODO ----------------> switch and remember to set training again
                                render=True,)
 
         # Direct reference to the ANN in our agent for convenience

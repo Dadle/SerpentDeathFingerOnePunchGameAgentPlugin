@@ -784,9 +784,13 @@ class ReplayMemory:
             # because its Q-values have not been updated.
             err = self.estimation_errors[:-1]
             err_count = np.count_nonzero(err > self.error_threshold)
+            if self.num_used > 0:
+                err_pct = err_count / self.num_used
+            else:
+                err_pct = 0
             msg = "\tNumber of large errors > {0}: {1} / {2} ({3:.1%})"
             printer.add(msg.format(self.error_threshold, err_count,
-                                   self.num_used, err_count / self.num_used))
+                                   self.num_used, err_pct))
 
     class EpisodeStatistics:
         """
