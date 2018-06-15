@@ -1032,9 +1032,9 @@ class Agent:
         # Epsilon-greedy policy for selecting an action from the Q-values.
         # During training the epsilon is decreased linearly over the given
         # number of iterations. During testing the fixed epsilon is used.
-        self.epsilon_greedy = EpsilonGreedy(start_value=0.5,
+        self.epsilon_greedy = EpsilonGreedy(start_value=0.9,
                                             end_value=0.05,
-                                            num_iterations=1e4,
+                                            num_iterations=1e6,
                                             num_actions=self.num_actions,
                                             epsilon_testing=0.01)
 

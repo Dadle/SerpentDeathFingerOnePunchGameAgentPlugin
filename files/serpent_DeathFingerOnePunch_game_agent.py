@@ -49,7 +49,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.memory_manager = MemoryManager()
 
         ###             ###
-        ### dqn SETUP  ###
+        ### dqn SETUP   ###
         ###             ###
 
         self.input_mapping = {
@@ -100,9 +100,9 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         self.setup_ddqn()
 
-        #To see the output of convolutional layers, set this to True
+        # To see the output of convolutional layers, set this to True
         if False:
-            idx = 50  # np.argmax(self.replay_memory.rewards)
+            idx = 0  # np.argmax(self.replay_memory.rewards)
             self.plot_state(idx=idx)
             self.plot_layer_output(model=self.model, layer_name='layer_conv1', state_index=idx, inverse_cmap=False)
             self.plot_layer_output(model=self.model, layer_name='layer_conv2', state_index=idx, inverse_cmap=False)
@@ -117,7 +117,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                                state_shape=self.downscale_img_size,
                                env_name=self.env_name,
                                training=True,  # TODO ----------------> switch and remember to set training again
-                               render=True,)
+                               render=True)
 
         # Direct reference to the ANN in our agent for convenience
         self.model = self.agent.model
@@ -131,9 +131,8 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.context = self.machine_learning_models["context_classifier"].predict(game_frame.frame)
         self.not_playing_context_counter += 1
 
-        #print(self.context)
-        if (self.context is None or self.context == "ofdp_game") and self.health > 0:
-            #self.game_state["alive"].appendleft(1)
+        print(self.context)
+        if (self.context is None or self.context in ["ofdp_playing", "ofdp_game"]) and self.health > 0:
             self.make_a_move(game_frame)
             self.not_playing_context_counter = 0
             return
@@ -143,7 +142,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             self.print_error()
 
         else:
-            # Adding this code to avoid runs being ended early due to
+            # This is a hack to avoid runs being ended early due to
             # context classifier getting the wrong context while playing
             if self.not_playing_context_counter < 4:
                 return
@@ -216,12 +215,15 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         action_meaning = self.ACTION_MEANING_OFDP[action]
         #print("MOVE:", action_meaning)
         buttons = self.input_mapping[action_meaning]
-        #print(f"Clicking button: {buttons}")
 
+        #print(f"Clicking button: {buttons}")
         #test_time_start = time.time()
-        self.input_controller.handle_keys(key_collection=buttons)
-        #for button in buttons:
-        #    self.input_controller.click(button=button)
+
+
+        #self.input_controller.handle_keys(key_collection=buttons) # This method does not seem to work
+        for button in buttons:
+            # self.input_controller.click(button=button)
+            self.input_controller.tap_key(button)
 
         # test_time = time.time() - test_time_start
         # Determine if a life was lost in this step. TODO Do I want this?
@@ -240,6 +242,8 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                                               kill_count=self.kill_count,
                                               miss_count=self.miss_count,
                                               health=self.health)
+
+        #self.plot_state(self.replay_memory.episode_memory.num_used-1, memory="episode")
 
         move_time = time.time() - move_time_start
         self.print_statistics(move_time=move_time, q_values=q_values)
@@ -354,7 +358,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add(f"AGENT DEATH FINGER ONE PUNCH THINKS:")
         self.printer.add(f"Decisions made this episode: {len(self.replay_memory.episode_memory.states)} "
                          f"\nAction: {self.ACTION_MEANING_OFDP[self.replay_memory.episode_memory.actions[-1]]}"
-                         f"\nQ_values: {np.round(q_values, 1)}" # {np.round(self.replay_memory.episode_memory.q_values[-1], 10)}"
+                         f"\nQ_values: {np.round(q_values, 0)}" # {np.round(self.replay_memory.episode_memory.q_values[-1], 10)}"
                          f"\nQ_values: [NOOP, LEFT, RIGHT, 2xLEFT, 2xRIGHT, R+L, L+R]"
                          f"\nQ_value is how good I think each move is right now")
 
@@ -369,6 +373,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add("")
         agent_mode = "training" if self.agent.training is True else "testing"
         self.printer.add(f"Agent is running in {agent_mode} mode")
+        self.printer.add(f"Agent makes a random move {int(round(self.epsilon*100,0))}% of the time")
         self.printer.add(f"Agent will be: {reward_feedback}")
         self.printer.add(f"Kill count   : {self.kill_count}")
         #self.printer.add(f"Miss count   : {self.miss_count}")
@@ -454,11 +459,14 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             # just gathered, so we will have to fill the replay-memory again.
             #self.replay_memory.reset()
 
-    def plot_state(self, idx):
+    def plot_state(self, idx, memory="full"):
         """Plot the state in the replay-memory with the given index."""
 
         # Get the state from the replay-memory.
-        state = self.replay_memory.states[idx]
+        if memory == "full":
+            state = self.replay_memory.states[idx]
+        elif memory == "episode":
+            state = self.replay_memory.episode_memory.states[idx]
 
         # Create figure with a grid of sub-plots.
         fig, axes = plt.subplots(1, 2)
