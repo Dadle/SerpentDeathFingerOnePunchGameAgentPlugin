@@ -603,12 +603,14 @@ class NeuralNetwork:
         # to zero - but the network weights must not be too low either
         # because it will make it hard to train the network.
         # You can experiment with values between 1e-2 and 1e-3.
-        init = tf.truncated_normal_initializer(mean=0.0, stddev=2e-3)
+        init = tf.truncated_normal_initializer(mean=0.0, stddev=2e-7)
 
         if self.use_pretty_tensor:
             # This builds the Neural Network using the PrettyTensor API,
             # which is a very elegant builder API, but some people are
             # having problems installing and using it.
+
+            print("******** Building a Neural Network using Pretty Tensor ********")
 
             import prettytensor as pt
 
@@ -616,7 +618,7 @@ class NeuralNetwork:
             x_pretty = pt.wrap(self.x)
 
             # Create the convolutional Neural Network using Pretty Tensor.
-            with pt.defaults_scope(activation_fn=tf.nn.relu):
+            with pt.defaults_scope(activation_fn=tf.nn.tanh):
                 # NOTE: orginally set with 4 fully connected hidden layers with 1024 neurons each
                 # Reduced number of fully connected layers to try and have the agent learn more with less
                 # Also changed kernes in cnn layers from 3,3,3 to 5,4,3 to allow more aggressive down sampling
@@ -627,8 +629,7 @@ class NeuralNetwork:
                     conv2d(kernel=4, depth=32, stride=2, name='layer_conv2', weights=init). \
                     conv2d(kernel=3, depth=64, stride=1, name='layer_conv3', weights=init). \
                     flatten(). \
-                    fully_connected(size=256, name='layer_fc1', weights=init). \
-                    fully_connected(size=128, name='layer_fc2', weights=init). \
+                    fully_connected(size=512, name='layer_fc1', weights=init). \
                     fully_connected(size=num_actions, name='layer_fc_out', weights=init,
                                     activation_fn=None)
 
@@ -647,6 +648,8 @@ class NeuralNetwork:
             # they actually create somewhat different TensorFlow graphs
             # where the variables have different names, which means the
             # checkpoints are incompatible for the two builder APIs.
+
+            print("******** Building a Neural Network using Tensorflow layers API ********")
 
             # Padding used for the convolutional layers.
             padding = 'SAME'
@@ -724,7 +727,7 @@ class NeuralNetwork:
         # -- Original optimizer --
         self.optimizer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
         # -- Alternative optimizer --
-        # self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
+        #self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
 
         # Used for saving and loading checkpoints.
         self.saver = tf.train.Saver()
@@ -798,7 +801,7 @@ class NeuralNetwork:
 
     def optimize(self, min_epochs=1.0, max_epochs=10,
                  batch_size=32, loss_limit=0.0015,
-                 learning_rate=1e-5):
+                 learning_rate=1e-5, printer_head_func=None):
         """
         Optimize the Neural Network by sampling states and Q-values
         from the replay-memory.
@@ -825,6 +828,8 @@ class NeuralNetwork:
             last 100 batches is below this value (or max_epochs is reached).
         :param learning_rate:
             Learning-rate to use for the optimizer.
+        :param printer_head_func:
+            TMP input. This should be a function that writes to priter class.
         """
 
         self.printer.add("Optimizing Neural Network to better estimate Q-values:")
@@ -875,12 +880,16 @@ class NeuralNetwork:
             self.printer.add("Capgemini Intelligent Automation - Death Finger One Punch agent")
             self.printer.add("Reinforcement Learning: Training a DQN Agent")
             self.printer.empty_line()
-            self.replay_memory.print_statistics(self.printer)
+            printer_head_func()
             self.printer.empty_line()
+            #self.replay_memory.print_statistics(self.printer)
+            #self.printer.empty_line()
             self.printer.add("Optimizing Neural Network to better estimate Q-values:")
             self.printer.add("\tLearning-rate: {0:.1e}".format(learning_rate))
             self.printer.add("\tLoss-limit: {0:.3f}".format(loss_limit))
             self.printer.add("\tMax epochs: {0:.1f}".format(max_epochs))
+            self.printer.add("\tBatch size: {0:.1f}".format(batch_size))
+            self.printer.add("\tMax iterations: {0:.1f}".format(max_iterations))
             self.printer.empty_line()
             self.printer.add("Training status")
             pct_epoch = i / iterations_per_epoch
@@ -934,7 +943,7 @@ class NeuralNetwork:
 
         # The name of the last operation of a layer,
         # assuming it uses Relu as the activation-function.
-        tensor_name = layer_name + "/Relu:0"
+        tensor_name = layer_name + "/Tanh:0"
 
         # Get the tensor with this name.
         tensor = tf.get_default_graph().get_tensor_by_name(tensor_name)
@@ -1034,15 +1043,15 @@ class Agent:
         # number of iterations. During testing the fixed epsilon is used.
         self.epsilon_greedy = EpsilonGreedy(start_value=0.9,
                                             end_value=0.05,
-                                            num_iterations=1e6,
+                                            num_iterations=2e5,
                                             num_actions=self.num_actions,
                                             epsilon_testing=0.01)
 
         # The following control-signals are only used during training.
 
         # The learning-rate for the optimizer decreases linearly.
-        self.learning_rate_control = LinearControlSignal(start_value=1e-5,
-                                                         end_value=1e-11,
+        self.learning_rate_control = LinearControlSignal(start_value=1e-6,
+                                                         end_value=1e-10,
                                                          num_iterations=5e6)
 
         # The loss-limit is used to abort the optimization whenever the
@@ -1058,8 +1067,8 @@ class Agent:
         # Later in the training we would occasionally get rare events
         # and would therefore have to optimize for more iterations
         # because the learning-rate had been decreased.
-        self.max_epochs_control = LinearControlSignal(start_value=5.0,
-                                                      end_value=20.0,
+        self.max_epochs_control = LinearControlSignal(start_value=3.0,
+                                                      end_value=10.0,
                                                       num_iterations=5e6)
 
         # The fraction of the replay-memory to be used.

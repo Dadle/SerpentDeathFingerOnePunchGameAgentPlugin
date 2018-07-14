@@ -45,7 +45,7 @@ class MemoryManager:
         :return: Kill count as int:
         """
         # Pick the memory address that is be overwriten automatically. This is the most stable address
-        kill_count_memory_address = 0x006FB344
+        kill_count_memory_address = 0x012FB710
         kill_count = c_int()
         self.ReadProcessMemory(self.processHandle, kill_count_memory_address, byref(kill_count), 4,
                                byref(self.numRead))  # This works somewhat direct address 0x12FB840

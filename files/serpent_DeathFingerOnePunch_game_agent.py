@@ -55,23 +55,28 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.input_mapping = {
             "NOOP": [],
             "LEFT": [KeyboardKey.KEY_LEFT],
-            "RIGHT": [KeyboardKey.KEY_RIGHT],
-            "DOUBLE_RIGHT": [KeyboardKey.KEY_RIGHT, KeyboardKey.KEY_RIGHT],
-            "DOUBLE_LEFT": [KeyboardKey.KEY_LEFT, KeyboardKey.KEY_LEFT],
-            "RIGHT_LEFT": [KeyboardKey.KEY_RIGHT, KeyboardKey.KEY_LEFT],
-            "LEFT_RIGHT": [KeyboardKey.KEY_LEFT, KeyboardKey.KEY_RIGHT]
+            "RIGHT": [KeyboardKey.KEY_RIGHT]
+
         }
+        """
+        "DOUBLE_RIGHT": [KeyboardKey.KEY_RIGHT, KeyboardKey.KEY_RIGHT],
+        "DOUBLE_LEFT": [KeyboardKey.KEY_LEFT, KeyboardKey.KEY_LEFT],
+        "RIGHT_LEFT": [KeyboardKey.KEY_RIGHT, KeyboardKey.KEY_LEFT],
+        "LEFT_RIGHT": [KeyboardKey.KEY_LEFT, KeyboardKey.KEY_RIGHT]
+        """
 
         # Action meaning for One Finger Death Punch
         self.ACTION_MEANING_OFDP = {
             0: "NOOP",
-            1: "RIGHT",
-            2: "LEFT",
-            3: "DOUBLE_RIGHT",
-            4: "DOUBLE_LEFT",
-            5: "RIGHT_LEFT",
-            6: "LEFT_RIGHT"
+            1: "LEFT",
+            2: "RIGHT"
         }
+        """
+        3: "DOUBLE_RIGHT",
+        4: "DOUBLE_LEFT",
+        5: "RIGHT_LEFT",
+        6: "LEFT_RIGHT"
+        """
 
         self.play_history = []
 
@@ -101,8 +106,8 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.setup_ddqn()
 
         # To see the output of convolutional layers, set this to True
-        if False:
-            idx = 0  # np.argmax(self.replay_memory.rewards)
+        if True:
+            idx = np.argmax(self.replay_memory.rewards)
             self.plot_state(idx=idx)
             self.plot_layer_output(model=self.model, layer_name='layer_conv1', state_index=idx, inverse_cmap=False)
             self.plot_layer_output(model=self.model, layer_name='layer_conv2', state_index=idx, inverse_cmap=False)
@@ -131,12 +136,12 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.context = self.machine_learning_models["context_classifier"].predict(game_frame.frame)
         self.not_playing_context_counter += 1
 
-        print(self.context)
+        #print(self.context)
         if (self.context is None or self.context in ["ofdp_playing", "ofdp_game"]) and self.health > 0:
             self.make_a_move(game_frame)
             self.not_playing_context_counter = 0
             return
-        elif self.kill_count > 10000:
+        elif not all(x < 10000 for x in self.replay_memory.episode_memory.kill_count):
             # This happens if the memory address for kill count changes for this episode
             # and we should just ignore the episode
             self.print_error()
@@ -144,7 +149,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         else:
             # This is a hack to avoid runs being ended early due to
             # context classifier getting the wrong context while playing
-            if self.not_playing_context_counter < 4:
+            if self.not_playing_context_counter < 10:
                 return
 
         self.do_splash_screen_action(self.context)
@@ -291,16 +296,16 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         #self.printer.add(f"Min reward: {self.replay_memory.rewards.min()}")
         #self.printer.add(f"Updated episode reward: {self.agent.episode_rewards}")
 
-        self.printer.add(f"Replay memory is {round(self.replay_memory.used_fraction() * 100, 2)}% full")
-        self.printer.add(f"Model trains when replay memory is more than "
-                         f"{int(self.agent.replay_fraction.get_value(iteration=count_states) * 100)}% full")
-        self.printer.add("")
+        #self.printer.add(f"Replay memory is {round(self.replay_memory.used_fraction() * 100, 2)}% full")
+        #self.printer.add(f"Model trains when replay memory is more than "
+        #                 f"{int(self.agent.replay_fraction.get_value(iteration=count_states) * 100)}% full")
+        #self.printer.add("")
         #self.printer.add(f"Number of end_episode flags in memory: "
         #                 f"{np.sum(self.replay_memory.end_episode)}")
 
         self.printer.flush()
 
-        if self.replay_memory.episode_statistics.num_episodes_completed % 25 == 0 \
+        if self.replay_memory.episode_statistics.num_episodes_completed % 10 == 0 \
                 and self.replay_memory.episode_statistics.num_episodes_completed > 0\
                 and self.agent.training:
             print("Saving replay memory checkpoint, please give me a minute...")
@@ -358,8 +363,8 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.printer.add(f"AGENT DEATH FINGER ONE PUNCH THINKS:")
         self.printer.add(f"Decisions made this episode: {len(self.replay_memory.episode_memory.states)} "
                          f"\nAction: {self.ACTION_MEANING_OFDP[self.replay_memory.episode_memory.actions[-1]]}"
-                         f"\nQ_values: {np.round(q_values, 0)}" # {np.round(self.replay_memory.episode_memory.q_values[-1], 10)}"
-                         f"\nQ_values: [NOOP, LEFT, RIGHT, 2xLEFT, 2xRIGHT, R+L, L+R]"
+                         f"\nQ_values: {np.round(q_values, 2)}"  # {np.round(self.replay_memory.episode_memory.q_values[-1], 10)}"
+                         f"\nQ_values: [NOOP, LEFT, RIGHT]"  # , 2xLEFT, 2xRIGHT, R+L, L+R]"
                          f"\nQ_value is how good I think each move is right now")
 
         #current_reward = self.calculate_reward()
@@ -448,9 +453,12 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
             # Perform an optimization run on the Neural Network so as to
             # improve the estimates for the Q-values.
             # This will sample random batches from the replay-memory.
-            self.model.optimize(learning_rate=learning_rate,
-                                loss_limit=loss_limit,
-                                max_epochs=max_epochs)
+            self.model.optimize(
+                batch_size=128,
+                learning_rate=learning_rate,
+                loss_limit=loss_limit,
+                max_epochs=max_epochs,
+                printer_head_func=self.add_printer_head)
 
             # Save a checkpoint of the Neural Network so we can reload it.
             self.model.save_checkpoint(count_states)

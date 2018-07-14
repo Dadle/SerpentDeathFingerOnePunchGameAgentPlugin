@@ -161,7 +161,7 @@ class ReplayMemory:
                 return
 
         # If episode checks out OK it is added to the rest of the replay memory
-        print("Adding episode to replay memory")
+        # print("Adding episode to replay memory")
 
         self.episode_memory.end_episode_updates(printer)
         self.episode_statistics.update_statistics(self.episode_memory, episode_time_seconds)
@@ -492,20 +492,22 @@ class ReplayMemory:
                                np.mean(episode_rewards),
                                np.max(episode_rewards)))
 
+
         # Print statistics for the Q-values before they were updated
         # in update_all_q_values().
-        msg = "\tQ-values Before, Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
+        msg = "\tQ-values Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
         printer.add(msg.format(np.min(self.q_values_old),
                                np.mean(self.q_values_old),
                                np.max(self.q_values_old)))
 
+        """
         # Print statistics for the Q-values after they were updated
         # in update_all_q_values().
         msg = "\tQ-values After,  Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
         printer.add(msg.format(np.min(self.q_values),
                                np.mean(self.q_values),
                                np.max(self.q_values)))
-
+        
         # Print statistics for the difference in Q-values before and
         # after the update in update_all_q_values().
         q_dif = self.q_values - self.q_values_old
@@ -513,6 +515,7 @@ class ReplayMemory:
         printer.add(msg.format(np.min(q_dif),
                                np.mean(q_dif),
                                np.max(q_dif)))
+        """
 
         # Print statistics for the number of large estimation errors.
         # Don't use the estimation error for the last state in the memory,
@@ -727,7 +730,7 @@ class ReplayMemory:
                 # And not what predicted reward we could get from this action (prediction).
                 # Prediction depends on all future actions as well to calculate cumulative reward
                 self.update_episode_q_values()
-                self.print_episode_q_statistics(printer)
+                self.print_episode_q_statistics(printer=printer)
 
 
 
@@ -759,11 +762,12 @@ class ReplayMemory:
 
             # Print statistics for the Q-values before they were updated
             # in update_all_q_values().
-            msg = "\tQ-values Before, Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
+            msg = "\tQ-values Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
             printer.add(msg.format(np.min(self.q_values_old),
                                    np.mean(self.q_values_old),
                                    np.max(self.q_values_old)))
 
+            """
             # Print statistics for the Q-values after they were updated
             # in update_all_q_values().
             msg = "\tQ-values After,  Min: {0:5.2f}, Mean: {1:5.2f}, Max: {2:5.2f}"
@@ -778,6 +782,7 @@ class ReplayMemory:
             printer.add(msg.format(np.min(q_dif),
                                    np.mean(q_dif),
                                    np.max(q_dif)))
+            """
 
             # Print statistics for the number of large estimation errors.
             # Don't use the estimation error for the last state in the memory,
