@@ -344,8 +344,20 @@ class ReplayMemory:
         # This is either set to the fraction of the replay-memory that
         # has high estimation errors - or it is set to 0.5. So at least
         # half of the batch has high estimation errors.
-        prob_err_hi = len(self.idx_err_hi) / self.num_used
-        prob_err_hi = max(prob_err_hi, 0.5)
+        if isinstance(self.idx_err_hi, np.ndarray):
+            try:
+                prob_err_hi = self.idx_err_hi.size / self.num_used
+            except Exception as e:
+                print(str(e))
+                print("idx_err_hi: ", self.idx_err_hi, "of type", type(self.idx_err_hi))
+        else:
+
+            prob_err_hi = self.idx_err_hi / self.num_used
+        try:
+            prob_err_hi = max(prob_err_hi, 0.5)
+        except Exception as e:
+            print(str(e))
+            print("prob_err_hi: ", prob_err_hi, "of type", type(prob_err_hi))
 
         # Number of samples in a batch that have high estimation errors.
         self.num_samples_err_hi = int(prob_err_hi * batch_size)

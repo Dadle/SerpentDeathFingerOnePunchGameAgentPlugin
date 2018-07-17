@@ -1,10 +1,19 @@
 from serpent.utilities import clear_terminal
+import numpy as np
+import time
 
 
 class TerminalPrinter:
+    """
+    TerminalPrinter contain methods to print status screens for relevant contexts during play
 
-    def __init__(self):
+    Printer class is set up to print entire screens of text at once to limit stuttering in console output
+    """
+
+    def __init__(self, replay_memory):
         self.lines = list()
+        self.game_state = None
+        self.replay_memory = replay_memory
 
     def add(self, content):
         self.lines.append(content)
@@ -19,3 +28,100 @@ class TerminalPrinter:
         clear_terminal()
         print("\n".join(self.lines))
         self.clear()
+
+    def add_printer_head(self):
+        run_time = time.time() - self.game_state.started_at
+        # serpent.utilities.clear_terminal()
+
+        #self.add("")
+        self.add("Capgemini Intelligent Automation - Death Finger One Punch agent")
+        self.add("Reinforcement Learning: Training a DQN Agent")
+        self.add("")
+
+        self.add("\033c" + f"SESSION RUN TIME: "
+                 f"{round(run_time // 86400)} days, "
+                 f"{round(run_time // 3600)} hours, "
+                 f"{round((run_time // 60) % 60)} minutes, "
+                 f"{round(run_time % 60)} seconds")
+        self.add("")
+        self.add(f"Current episode: {self.replay_memory.episode_statistics.num_episodes_completed}")
+        self.add("")
+
+        self.add(f"Average Last 10   Runs: "
+                         f" Time: {round(self.replay_memory.episode_statistics.average_time_10, 2)}"
+                         f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_10, 2))}")
+        self.add(f"Average Last 100  Runs: "
+                         f" Time: {round(self.replay_memory.episode_statistics.average_time_100, 2)}"
+                         f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_100, 2))}")
+        self.add(f"Average Last 1000 Runs: "
+                         f" Time: {round(self.replay_memory.episode_statistics.average_time_1000, 2)}"
+                         f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_1000, 2))}")
+        self.add("")
+
+    def print_statistics(self, move_time, q_values, action_meaning_ofdp):
+        episode_run_time_seconds = time.time() - self.game_state.episode_start_time
+        state_count = len(self.replay_memory.episode_memory.states)
+        #effective_apm = 0 if state_count else round(
+        #    state_count / episode_run_time_seconds, 2)
+        effective_apm = state_count / episode_run_time_seconds
+        self.add_printer_head()
+
+        #self.add(f"Reading context: {self.context}")
+
+        self.add(f"AGENT DEATH FINGER ONE PUNCH THINKS:")
+        self.add(f"Decisions made this episode: {len(self.replay_memory.episode_memory.states)} "
+                         f"\nAction: {action_meaning_ofdp[self.replay_memory.episode_memory.actions[-1]]}"
+                         f"\nQ_values: {np.round(q_values, 2)}"  # {np.round(self.replay_memory.episode_memory.q_values[-1], 10)}"
+                         f"\nQ_values: [NOOP, LEFT, RIGHT]"  # , 2xLEFT, 2xRIGHT, R+L, L+R]"
+                         f"\nQ_value is how good I think each move is right now")
+
+        #current_reward = self.calculate_reward()
+        current_reward = self.replay_memory.episode_memory.rewards[-1]
+        reward_feedback = ''
+        if current_reward > 0:
+            reward_feedback = 'Rewarded'
+        elif current_reward < 0:
+            reward_feedback = 'punished'
+
+        self.add("")
+        agent_mode = "training" if self.game_state.training is True else "testing"
+        self.add(f"Agent is running in {agent_mode} mode")
+        self.add(f"Agent makes a random move {int(round(self.game_state.epsilon*100,0))}% of the time")
+        self.add(f"Agent will be: {reward_feedback}")
+        self.add(f"Kill count   : {self.game_state.kill_count}")
+        #self.add(f"Miss count   : {self.miss_count}")
+        self.add(f"Player health: {self.game_state.health}")
+        self.add(f"Reward       : {current_reward}")
+        self.add("")
+
+        # TEMP PRINT FOR DEBUGGING
+        self.add(f"Computing move in: {round(move_time, 3)} seconds")
+        self.add(f"Effective decisions per second: {round(effective_apm, 2)}")
+        # self.add(f"Episode clock time: "
+        #                 f"{self.episode_time // 3600} hours, "
+        #                 f"{(self.episode_time // 60) % 60} minutes, "
+        #                 f"{self.episode_time % 60} seconds")
+        #self.add(f"States processed this episode: {len(self.replay_memory.episode_memory.states)}")
+
+        if self.replay_memory.num_used > 0:
+            self.add("")
+            self.add(f"CURRENT RUN - TIME ALIVE: "
+                             f"{round(episode_run_time_seconds, 2)} seconds "
+                             f"and {self.game_state.kill_count} kills")
+            self.add(f"LAST    RUN - TIME ALIVE: "
+                             f"{round(self.replay_memory.episode_statistics.last_episode_time, 2)} seconds "
+                             f"and {self.replay_memory.episode_statistics.last_episode_kill_count} kills")
+            self.add(f"RECORD  RUN - TIME ALIVE: "
+                             f"{round(self.replay_memory.episode_statistics.record_episode_time, 2)} seconds "
+                             f"and {self.replay_memory.episode_statistics.record_kill_count} kills "
+                             f"(Run {self.replay_memory.episode_statistics.record_episode})")
+
+        # Finally print all above to the screen as one message (Less flickering)
+        self.flush()
+
+    def print_error(self):
+        self.add_printer_head()
+        self.add("Memory address changed for this run")
+        self.add("Agent will not be playing until kill count is correct again")
+        self.add("This should be resolved within one or two runs")
+        self.flush()

@@ -185,27 +185,6 @@ checkpoint_base_dir = 'checkpoints'
 # Combination of base-dir and environment-name.
 checkpoint_dir = None
 
-
-def update_paths(env_name):
-    """
-    Update the path-names for the checkpoint-dir.
-
-    Call this after you have changed checkpoint_base_dir and
-    before you create the Neural Network.
-
-    :param env_name:
-        Name of the game-environment you will use. This will be part of filenames for checkpoints.
-    """
-
-    global checkpoint_dir
-
-    # Add the environment-name to the checkpoint-dir.
-    checkpoint_dir = os.path.join(checkpoint_base_dir, env_name)
-
-    # Create the checkpoint-dir if it does not already exist.
-    if not os.path.exists(checkpoint_dir):
-        os.makedirs(checkpoint_dir)
-
 ########################################################################
 # A state is basically just a multi-dimensional array that is being
 # input to the Neural Network. The state consists of pre-processed images
@@ -518,7 +497,7 @@ class NeuralNetwork:
     better at estimating the Q-values.
     """
 
-    def __init__(self, num_actions, state_shape, replay_memory, use_pretty_tensor=True):
+    def __init__(self, num_actions, state_shape, replay_memory, printer, use_pretty_tensor=True):
         """
         :param num_actions:
             Number of discrete actions for the game-environment.
@@ -536,7 +515,7 @@ class NeuralNetwork:
         # Replay-memory used for sampling random batches.
         self.replay_memory = replay_memory
 
-        self.printer = TerminalPrinter()
+        self.printer = printer
 
         # Path for saving/restoring checkpoints.
         self.checkpoint_path = os.path.join(checkpoint_dir, "checkpoint")
@@ -801,7 +780,7 @@ class NeuralNetwork:
 
     def optimize(self, min_epochs=1.0, max_epochs=10,
                  batch_size=32, loss_limit=0.0015,
-                 learning_rate=1e-5, printer_head_func=None):
+                 learning_rate=1e-5):
         """
         Optimize the Neural Network by sampling states and Q-values
         from the replay-memory.
@@ -828,8 +807,6 @@ class NeuralNetwork:
             last 100 batches is below this value (or max_epochs is reached).
         :param learning_rate:
             Learning-rate to use for the optimizer.
-        :param printer_head_func:
-            TMP input. This should be a function that writes to priter class.
         """
 
         self.printer.add("Optimizing Neural Network to better estimate Q-values:")
@@ -880,7 +857,7 @@ class NeuralNetwork:
             self.printer.add("Capgemini Intelligent Automation - Death Finger One Punch agent")
             self.printer.add("Reinforcement Learning: Training a DQN Agent")
             self.printer.empty_line()
-            printer_head_func()
+            self.printer.add_printer_head()
             self.printer.empty_line()
             #self.replay_memory.print_statistics(self.printer)
             #self.printer.empty_line()
@@ -1000,7 +977,7 @@ class Agent:
     instances of the Replay Memory and Neural Network.
     """
 
-    def __init__(self, action_list, state_shape, env_name, training, render=False):
+    def __init__(self, action_list, state_shape, env_name, training, checkpoint_base_dir_arg='checkpoints'):
         """
         Create an object-instance. This also creates a new object for the
         Replay Memory and the Neural Network.
@@ -1019,8 +996,15 @@ class Agent:
             Boolean whether to render the game-images to screen during testing. CURRENTLY NOT IMPLEMENTED
         """
 
+        global checkpoint_base_dir
+
+        checkpoint_base_dir = checkpoint_base_dir_arg
+
+        self.game_state = None
+
         # Name of the environment. Only used for locating checkpoint files
         self.env_name = env_name
+        self.update_paths(env_name=self.env_name)
 
         # The number of possible actions that the agent may take in every step.
         self.num_actions = len(action_list)
@@ -1031,9 +1015,6 @@ class Agent:
 
         # Whether we are training (True) or testing (False).
         self.training = training
-
-        # Whether to render each image-frame of the game-environment to screen.
-        self.render = render
 
         # List of string-names for the actions in the game-environment.
         self.action_names = action_list  # self.env.unwrapped.get_action_meanings()
@@ -1107,11 +1088,145 @@ class Agent:
                                               env_name=self.env_name,
                                               checkpoint_dir=checkpoint_dir)
 
+        # TerminalPrinter prints a list of instructions to cmd window, but ensures there is minimal stuttering in output
+        self.printer = TerminalPrinter(self.replay_memory)
+
         # Create the Neural Network used for estimating Q-values.
         self.model = NeuralNetwork(num_actions=self.num_actions,
                                    state_shape=self.state_shape,
+                                   printer=self.printer,
                                    replay_memory=self.replay_memory)
 
     def get_action_name(self, action):
         """Return the name of an action."""
         return self.action_names[action]
+
+    def train_dqn(self):
+        # Counter for the number of states we have processed.
+        # This is stored in the TensorFlow graph so it can be
+        # saved and reloaded along with the checkpoint.
+        count_states = self.model.get_count_states()
+
+        # How much of the replay-memory should be used.
+        use_fraction = self.replay_fraction.get_value(iteration=count_states)
+
+        # When the replay-memory is sufficiently full.
+        if self.replay_memory.is_full() \
+                or self.replay_memory.used_fraction() > use_fraction:
+
+            # Update all Q-values in the replay-memory through a backwards-sweep.
+            # TODO: Swapped this approach with one only updating q_values for each episode when it is over
+            # The idea is that the reward for each episode will not change after initial evaluation.
+            # The reward will not change once an episode is completed, and we do not calculate
+            # new q_values after an episode is finished, so why would we run through previous epiisodes
+            # and growing the action values?
+            # Answer: Because the Q values are growing due to the rolling out of reards backwards in time
+            #         A Reward added on to the old q_value will grow the resulting action value we use for training
+            #         to be higher than any previous Q value. This means Q values grow over time and are inherently
+            #         unstable. We need to update all q_values to ensure they are on the correct scale,
+            #         while ensuring that they do not grow out of control by only using a small batch size for training
+            self.replay_memory.update_all_q_values(self.printer)
+
+            # Get the control parameters for optimization of the Neural Network.
+            # These are changed linearly depending on the state-counter.
+            learning_rate = self.learning_rate_control.get_value(iteration=count_states)
+            loss_limit = self.loss_limit_control.get_value(iteration=count_states)
+            max_epochs = self.max_epochs_control.get_value(iteration=count_states)
+
+            # Perform an optimization run on the Neural Network so as to
+            # improve the estimates for the Q-values.
+            # This will sample random batches from the replay-memory.
+            self.model.optimize(
+                batch_size=128,
+                learning_rate=learning_rate,
+                loss_limit=loss_limit,
+                max_epochs=max_epochs)
+
+            # Save a checkpoint of the Neural Network so we can reload it.
+            self.model.save_checkpoint(count_states)
+
+    def get_action(self, game_frame):
+
+        # Counter for the number of states we have processed.
+        # This is stored in the TensorFlow graph so it can be
+        # saved and reloaded along with the checkpoint.
+        count_states = self.model.get_count_states()
+
+        if self.game_state.new_episode:
+            # Create a new motion-tracer for processing images from the
+            # game-environment. Initialize with the first image-frame.
+            # This resets the motion-tracer so the trace starts again.
+            # This could also be done if end_life==True.
+            self.motion_tracer = MotionTracer(image=game_frame.frame, target_size=self.game_state.downscale_img_size)
+
+            # Increase the counter for the number of episodes.
+            # This counter is stored inside the TensorFlow graph
+            # so it can be saved and restored with the checkpoint.
+            self.model.increase_count_episodes()
+
+            self.game_state.new_episode = False
+
+        # Process the image from the game-environment in the motion-tracer.
+        # This will first be used in the next iteration of the loop.
+        self.motion_tracer.process(image=game_frame.frame)
+
+        # Get the state of the game-environment from the motion-tracer.
+        # The state has two images: (1) The last image-frame from the game
+        # and (2) a motion-trace that shows movement trajectories.
+        state = self.motion_tracer.get_state()
+
+        # Use the Neural Network to estimate the Q-values for the state.
+        # Note that the function assumes an array of states and returns
+        # a 2-dim array of Q-values, but we just have a single state here.
+        q_values = self.model.get_q_values(states=[state])[0]
+        self.game_state.q_values = q_values
+
+        # Determine the action that the agent must take in the game-environment.
+        # The epsilon is just used for printing further below.
+        action, self.game_state.epsilon = self.epsilon_greedy.get_action(q_values=q_values,
+                                                                         iteration=count_states,
+                                                                         training=self.training)
+
+        # Add the state of the game-environment to the replay-memory.
+        self.replay_memory.episode_memory.add(state=state,
+                                              q_values=q_values,
+                                              action=action,
+                                              reward=self.calculate_reward(),
+                                              kill_count=self.game_state.kill_count,
+                                              miss_count=self.game_state.miss_count,
+                                              health=self.game_state.health)
+
+        # Increase the counter for the number of states that have been processed.
+        self.model.increase_count_states()
+
+        return action
+
+    def calculate_reward(self):
+        # reward is the number of kills made - number of health points lost since last state
+        reward = 0.
+        if len(self.replay_memory.episode_memory.states) > 0:
+            reward += self.game_state.kill_count - self.replay_memory.episode_memory.kill_count[-1]
+            reward += self.game_state.health - self.replay_memory.episode_memory.health[-1]
+            #reward -= self.game_state.miss_count - self.replay_memory.episode_memory.miss_count[-1]
+        return reward
+
+    @staticmethod
+    def update_paths(env_name):
+        """
+        Update the path-names for the checkpoint-dir.
+
+        Call this after you have changed checkpoint_base_dir and
+        before you create the Neural Network.
+
+        :param env_name:
+            Name of the game-environment you will use. This will be part of filenames for checkpoints.
+        """
+
+        global checkpoint_dir
+
+        # Add the environment-name to the checkpoint-dir.
+        checkpoint_dir = os.path.join(checkpoint_base_dir, env_name)
+
+        # Create the checkpoint-dir if it does not already exist.
+        if not os.path.exists(checkpoint_dir):
+            os.makedirs(checkpoint_dir)
