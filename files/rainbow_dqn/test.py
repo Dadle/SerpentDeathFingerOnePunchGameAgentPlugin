@@ -3,8 +3,6 @@ import plotly
 from plotly.graph_objs import Scatter, Line
 import torch
 
-from env import Env
-
 
 # Globals
 Ts, rewards, Qs, best_avg_reward = [], [], [], -1e10
@@ -12,51 +10,32 @@ Ts, rewards, Qs, best_avg_reward = [], [], [], -1e10
 
 # Test DQN
 def test(args, T, dqn, val_mem, evaluate=False):
-  global Ts, rewards, Qs, best_avg_reward
-  env = Env(args)
-  env.eval()
-  Ts.append(T)
-  T_rewards, T_Qs = [], []
+    global Ts, rewards, Qs, best_avg_reward
+    Ts.append(T)
+    T_Qs = []
+    T_rewards = list(val_mem.episode_statistics.reward_last_10)
 
-  # Test performance over several episodes
-  done = True
-  for _ in range(args.evaluation_episodes):
-    while True:
-      if done:
-        state, reward_sum, done = env.reset(), 0, False
+    # Test Q-values over validation memory
+    for state in val_mem:  # Iterate over valid states
+        T_Qs.append(dqn.evaluate_q(state))
 
-      action = dqn.act_e_greedy(state)  # Choose an action ε-greedily
-      state, reward, done = env.step(action)  # Step
-      reward_sum += reward
-      if args.render:
-        env.render()
+    avg_reward, avg_Q = sum(T_rewards) / len(T_rewards), sum(T_Qs) / len(T_Qs)
+    if not evaluate:
+        # Append to results
+        rewards.append(T_rewards)
+        Qs.append(T_Qs)
 
-      if done:
-        T_rewards.append(reward_sum)
-        break
-  env.close()
+        # Plot
+        _plot_line(Ts, rewards, 'Reward', path='results')
+        _plot_line(Ts, Qs, 'Q', path='results')
 
-  # Test Q-values over validation memory
-  for state in val_mem:  # Iterate over valid states
-    T_Qs.append(dqn.evaluate_q(state))
+        # Save model parameters if improved
+        if avg_reward > best_avg_reward:
+            best_avg_reward = avg_reward
+            dqn.save(os.path.join(args.checkpoint_path, args.env_name))
 
-  avg_reward, avg_Q = sum(T_rewards) / len(T_rewards), sum(T_Qs) / len(T_Qs)
-  if not evaluate:
-    # Append to results
-    rewards.append(T_rewards)
-    Qs.append(T_Qs)
-
-    # Plot
-    _plot_line(Ts, rewards, 'Reward', path='results')
-    _plot_line(Ts, Qs, 'Q', path='results')
-
-    # Save model parameters if improved
-    if avg_reward > best_avg_reward:
-      best_avg_reward = avg_reward
-      dqn.save('results')
-
-  # Return average reward and Q-value
-  return avg_reward, avg_Q
+    # Return average reward and Q-value
+    return avg_reward, avg_Q
 
 
 # Plots min, max and mean + standard deviation bars of a population over time

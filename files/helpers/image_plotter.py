@@ -130,27 +130,21 @@ class ImagePlotter:
         # in a single Notebook cell.
         plt.show()
 
-    def plot_state(self, game_state, idx, memory="full"):
+    def plot_state(self, states):
         """Plot the state in the replay-memory with the given index."""
 
-        # Get the state to visualize from the replay-memory.
-        if memory == "full":
-            state = game_state.replay_memory.states[idx]
-        elif memory == "episode":
-            state = game_state.replay_memory.episode_memory.states[idx]
-
         # Create figure with a grid of sub-plots.
-        fig, axes = plt.subplots(1, 2)
+        num_images = len(states)
+        num_grids = math.ceil(math.sqrt(num_images))
+        fig, axes = plt.subplots(num_grids, num_grids)
 
-        # Plot the image from the game-environment.
-        ax = axes.flat[0]
-        ax.imshow(state[:, :, 0], vmin=0, vmax=255,
-                  interpolation='lanczos', cmap='gray')
+        for i, ax in enumerate(axes.flat):
+            # Plot the image from the game-environment.
+            if i < num_images:
+                ax.imshow(states[i].frame[:, :], vmin=0, vmax=1,
+                          interpolation='lanczos', cmap='gray')
 
-        # Plot the motion-trace.
-        ax = axes.flat[1]
-        ax.imshow(state[:, :, 1], vmin=0, vmax=255,
-                  interpolation='lanczos', cmap='gray')
+            ax.set_xticks([])
+            ax.set_yticks([])
 
-        # This is necessary if we show more than one plot in a single Notebook cell.
         plt.show()

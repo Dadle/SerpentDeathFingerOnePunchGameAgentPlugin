@@ -33,9 +33,9 @@ class RainbowMain:
 
     def setup_agent(self, number_of_possible_actions):
         # Environment
-        #env = Env(args)
-        #env.train()
-        #action_space = env.action_space()
+        env = Env(args)
+        env.train()
+        action_space = env.action_space()
 
         # Agent
         dqn = Agent(self.args, number_of_possible_actions) # TODO: Important

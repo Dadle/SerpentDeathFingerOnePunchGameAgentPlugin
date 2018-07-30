@@ -1,5 +1,4 @@
 import time
-from datetime import datetime
 
 # Constants used for zoom level
 ZOOM_MAIN = "main"
@@ -15,10 +14,9 @@ class GameState:
     current game state and vital components like the ones mentioned above
     """
 
-    def __init__(self, training, printer, memory_manager, downscale_img_size):
+    def __init__(self, training, printer, memory_manager):
         self.printer = printer
         self.memory_manager = memory_manager
-        self.downscale_img_size = downscale_img_size
 
         self.new_episode = True
         self.kill_count = 0
@@ -26,7 +24,7 @@ class GameState:
         self.health = 10
         self.zoom_level = ZOOM_MAIN
         self.training = training
-        self.epsilon = 0.9 if training else 0.05
+        #self.epsilon = 0.9 if training else 0.05
         self.not_playing_context_counter = 0
         self.episode_time = 0
         self.started_at = time.time()
@@ -35,6 +33,11 @@ class GameState:
         self.episode_end_time = None
         self.not_playing_context_counter = 0
         self.q_values = []
+        self.episode_reward_total = 0
+        self.agent_mode = "initial value"
+
+        self.episode_statistics = []
+        self.episode_kill_count = []
 
     def reset_game_state(self):
         self.kill_count = 0
@@ -46,8 +49,10 @@ class GameState:
         self.episode_end_time = None
         self.not_playing_context_counter = 0
         self.q_values = []
+        self.episode_reward_total = 0
+        self.episode_kill_count = []
 
-    def update_kill_count(self):
+    def read_kill_count(self):
         """
         Get kill count from game memory and check that it is larger than current value,
         if yes, return kill count from memory, else return current kill count
