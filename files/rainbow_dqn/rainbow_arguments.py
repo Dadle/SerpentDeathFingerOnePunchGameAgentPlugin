@@ -33,7 +33,7 @@ class RainbowArguments:
         self.norm_clip = 10  # Max L2 norm for gradient clipping
         self.learn_start = int(750)  # int(80e3)  # Number of steps before starting training
         self.evaluate = False  # True means evaluate only
-        self.evaluation_interval = 100  # Number of training episodes between evaluations
+        self.evaluation_interval = 150  # 100  # Number of training episodes between evaluations
         self.evaluation_episodes = 10  # Number of evaluation episodes to average over
         self.evaluation_size = 500  # Number of transitions to use for validating Q
         # self.log_interval = 25000  # Number of training steps between logging status

@@ -4,9 +4,9 @@ import gc
 import psutil
 import offshoot
 import torch
-import numpy as np
 import tensorflow as tf
 from keras import backend as Keras_backend
+from datetime import datetime
 from serpent.frame_grabber import FrameGrabber
 from serpent.game_agent import GameAgent
 from serpent.input_controller import MouseButton, KeyboardKey
@@ -45,7 +45,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         # To avoid issues with GPU memory when using both Keras and Pytorch at the same time
         # Forcing Keras to run on CPU since this is a pretrained classifier that does not need GPU acceleration
-        config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.4))
+        config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.7))
                                 #intra_op_parallelism_threads=4,
                                 #inter_op_parallelism_threads=4, allow_soft_placement=True,
                                 #device_count={'CPU': 4, 'GPU': 0})
@@ -131,6 +131,8 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         self.episode_end = False
         self.evaluation_run_count = 0
+        self.last_updated_net_time = "Not updated yet"
+        self.last_updated_net_episode = self.replay_memory.episode_count
 
         # render the output of the cnn layers for a state to see what features are learned
         #self.image_plotter.render_cnn_layer_outputs(self.game_state)
@@ -144,22 +146,15 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         return context_classifier
 
     def handle_play(self, game_frame):
+        self.move_time_start = time.time()
         self.game_frame_buffer = FrameGrabber.get_frames([0, 1, 2, 3], frame_type="PIPELINE")
         frame_buffer = self.game_frame_buffer.frames
-
-        for i, game_frame in enumerate(frame_buffer):
-            self.visual_debugger.store_image_data(
-                game_frame.frame,
-                game_frame.frame.shape,
-                str(i)
-            )
-
-        #self.image_plotter.plot_state(frame_buffer)
 
         context_frame = FrameGrabber.get_frames([0], frame_type="FULL").frames[0]
         context = self.machine_learning_models["context_classifier"].predict(context_frame.frame)
         self.game_state.current_context = context
         self.game_state.not_playing_context_counter += 1
+        self.move_time = time.time() - self.move_time_start
 
         #print(context)
         if (context is None or context in ["ofdp_playing", "ofdp_game"]) and self.game_state.health > 0:
@@ -177,7 +172,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         else:
             # This is a hack to avoid runs being ended early due to
             # context classifier getting the wrong context while playing
-            if self.game_state.not_playing_context_counter < 1:
+            if self.game_state.not_playing_context_counter < 5:
                 return
 
         # Navigate context menu if identified
@@ -195,8 +190,6 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         Use the Neural Network to decide which actions to take in each step through Q-value estimates.
         """
 
-        move_time_start = time.time()
-
         self.game_state.update_zoom_level(context_frame)
         kill_count = self.game_state.read_kill_count()
         health = self.game_state.update_health_counter(context_frame)  # self.update_health()
@@ -213,7 +206,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         #            print(state)
         #            raise ValueError('A very specific bad thing happened.')
         action = self.agent.act(torch_state)
-        reward = self.agent.calculate_reward(kill_count, health)
+        reward = self.agent.calculate_reward(kill_count)  # , health)
         self.game_state.episode_reward_total = self.game_state.episode_reward_total + reward
         self.game_state.kill_count = kill_count
         self.game_state.health = health
@@ -270,14 +263,14 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                 self.training_loss = self.agent.learn(self.replay_memory)
                 print("Finished training agent", self.env_name)
 
-        move_time = time.time() - move_time_start
         self.agent.printer.print_statistics(action=action,
                                             reward=reward,
-                                            move_time=move_time,
+                                            move_time=self.move_time,
                                             agent_training=self.agent.training,  # self.game_state.q_values,
-                                            global_state_count = global_state_count,
+                                            global_state_count=global_state_count,
                                             action_meaning_ofdp=self.ACTION_MEANING_OFDP,
-                                            training_loss=self.training_loss)
+                                            last_updated_net_time=self.last_updated_net_time,
+                                            last_updated_net_episode=self.last_updated_net_episode)
 
     def end_episode(self):
         # Calculated survival time for current episode in seconds
@@ -308,7 +301,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         self.agent.reset_noise()  # Draw a new set of noisy weights
 
         if self.replay_memory.transitions.global_state_count >= self.rainbow_arguments.learn_start:
-            if self.replay_memory.transitions.cur_episode % 10 == 0:
+            if self.replay_memory.transitions.cur_episode % 200 == 0:
                 print("Saving replay memory checkpoint, please give me a minute...")
                 self.replay_memory.store_memory_checkpoint()
                 print("Finished storing replay memory for agent", self.env_name)
@@ -324,6 +317,15 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                 # Count if agent online net is set to evaluation mode
                 self.evaluation_run_count = self.evaluation_run_count + 1
 
+                if self.evaluation_run_count >= self.rainbow_arguments.evaluation_episodes \
+                        and len(self.val_mem.episode_statistics.reward_last_10) >= 10:
+                    avg_reward, avg_q = test(self.rainbow_arguments,
+                                             range(self.replay_memory.transitions.global_state_count - self.evaluation_run_count,
+                                                   self.replay_memory.transitions.global_state_count),
+                                             self.agent, self.val_mem)
+                    self.replay_memory.episode_statistics.update_eval(avg_reward, avg_q)
+                    self.agent.train()  # Set DQN (online network) back to training mode
+
             if self.replay_memory.transitions.cur_episode % self.rainbow_arguments.evaluation_interval == 0:
                 self.agent.eval()  # Set DQN (online network) to evaluation mode
                 # val_mem stats are only used to evaluate reward over
@@ -333,14 +335,10 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
                 self.val_mem.episode_statistics.reset_statistics()
                 self.evaluation_run_count = 0
 
-            if self.evaluation_run_count >= self.rainbow_arguments.evaluation_episodes:
-                avg_reward, avg_q = test(self.rainbow_arguments, self.replay_memory.transitions.global_state_count,
-                                         self.agent, self.val_mem)
-                self.replay_memory.episode_statistics.update_eval(avg_reward, avg_q)
-                self.agent.train()  # Set DQN (online network) back to training mode
-
             # Update target network
             if self.replay_memory.transitions.cur_episode % self.rainbow_arguments.target_update == 0:
+                self.last_updated_net_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                self.last_updated_net_episode = self.replay_memory.transitions.cur_episode
                 self.agent.update_target_net()
 
         self.replay_memory.transitions.inc_episode()

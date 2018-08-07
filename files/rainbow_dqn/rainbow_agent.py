@@ -118,11 +118,11 @@ class Agent:
         self.online_net.eval()
         self.training = 'evaluation'
 
-    def calculate_reward(self, kill_count, health):
+    def calculate_reward(self, kill_count):  #, health):
         # reward is the number of kills made - number of health points lost since last state
         reward = 0.
         reward += kill_count - self.printer.game_state.kill_count
-        reward += health - self.printer.game_state.health
+        #reward += health - self.printer.game_state.health
         #reward -= self.game_state.miss_count - self.replay_memory.episode_memory.miss_count[-1]
         #if self.args.reward_clip > 0:  # Clipping rewards between [-1, 1] as standard
         #    reward = np.clip(reward, -self.args.reward_clip, self.args.reward_clip)

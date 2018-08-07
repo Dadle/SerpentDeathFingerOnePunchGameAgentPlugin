@@ -58,7 +58,8 @@ class TerminalPrinter:
                          f" & Kill Count: {int(round(self.replay_memory.episode_statistics.average_kill_count_1000, 2))}")
         self.add("")
 
-    def print_statistics(self, action, reward, move_time, agent_training, global_state_count, action_meaning_ofdp, training_loss):
+    def print_statistics(self, action, reward, move_time, agent_training, global_state_count, action_meaning_ofdp,
+                         last_updated_net_time, last_updated_net_episode):
         episode_run_time_seconds = time.time() - self.game_state.episode_start_time
         #effective_apm = 0 if state_count else round(
         #    state_count / episode_run_time_seconds, 2)
@@ -87,14 +88,14 @@ class TerminalPrinter:
         self.add(f"So far observed: {global_state_count} states") #self.replay_memory.transitions.global_state_count} states")
         self.add(f"Agent is running in {agent_mode} mode")
         #self.add(f"Agent makes a random move {int(round(self.game_state.epsilon*100,0))}% of the time")
-        self.add(f"Agent will be: {reward_feedback}")
         self.add(f"Kill count   : {self.game_state.kill_count}")
         #self.add(f"Miss count   : {self.miss_count}")
         self.add(f"Player health: {self.game_state.health}")
-        self.add(f"Reward       : {reward}")
+        #self.add(f"Reward       : {reward}")
+        self.add(f"Agent will be: {reward_feedback}")
         self.add(f"Total Reward : {self.game_state.episode_reward_total}")
-        self.add(f"Last 10 episode rewards: {list(self.replay_memory.episode_statistics.reward_last_10)}")
-        self.add(f"Loss from last training update: {training_loss}")
+        #self.add(f"Last 10 episode rewards: {list(self.replay_memory.episode_statistics.reward_last_10)}")
+        #self.add(f"Loss from last training update: {training_loss}")
         self.add("")
 
         # TEMP PRINT FOR DEBUGGING
@@ -124,6 +125,7 @@ class TerminalPrinter:
         self.add(f"RECORD EVALUATION - average reward: "
                  f"{round(self.replay_memory.episode_statistics.eval_reward_record, 2)} "
                  f"and average Q value {round(self.replay_memory.episode_statistics.eval_avg_q_record, 2)}")
+        self.add(f"last swapped online net : {last_updated_net_time} after {last_updated_net_episode} episodes")
 
         # Finally print all above to the screen as one message (Less flickering)
         self.flush()
