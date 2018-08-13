@@ -11,27 +11,41 @@ class DQN(nn.Module):
         self.atoms = args.atoms
         self.action_space = action_space
 
-        self.conv1 = nn.Conv2d(args.history_length, 32, 8, stride=4, padding=1)
+        self.conv1 = nn.Conv3d(args.history_length, 32, kernel_size=(9,9,3), stride=5, padding=(2,2,0))
         self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, 3)
-        self.fc_h_v = NoisyLinear(3136, args.hidden_size, std_init=args.noisy_std)
-        self.fc_h_a = NoisyLinear(3136, args.hidden_size, std_init=args.noisy_std)
+        self.fc_h_v = NoisyLinear(29400, args.hidden_size, std_init=args.noisy_std)
+        self.fc_h_a = NoisyLinear(29400, args.hidden_size, std_init=args.noisy_std)
         self.fc_z_v = NoisyLinear(args.hidden_size, self.atoms, std_init=args.noisy_std)
         self.fc_z_a = NoisyLinear(args.hidden_size, action_space * self.atoms, std_init=args.noisy_std)
 
     def forward(self, x, log=False):
+        #x = x.reshape(1,3,139,139,4)
+        print("x shape:", x.shape)
+        print("0", x.shape)
         x = F.relu(self.conv1(x))
+        print('1', x.shape)
+        x = x.view(-1,32,35,35)
+        print("2", x.shape)
         x = F.relu(self.conv2(x))
+        print("3", x.shape)
         x = F.relu(self.conv3(x))
-        x = x.view(-1, 3136)  #
+        print("4", x.shape)
+        x = x.view(-1, 29400)  #
+        print("view", x.shape)
         v = self.fc_z_v(F.relu(self.fc_h_v(x)))  # Value stream
+        print("value", x.shape)
         a = self.fc_z_a(F.relu(self.fc_h_a(x)))  # Advantage stream
+        print("advantage", x.shape)
         v, a = v.view(-1, 1, self.atoms), a.view(-1, self.action_space, self.atoms)
+        
         q = v + a - a.mean(1, keepdim=True)  # Combine streams
+        print("q1", x.shape)
         if log:  # Use log softmax for numerical stability
             q = F.log_softmax(q, dim=2)  # Log probabilities with action over second dimension
         else:
             q = F.softmax(q, dim=2)  # Probabilities with action over second dimension
+        print("Q:",q.shape)
         return q
 
     def reset_noise(self):

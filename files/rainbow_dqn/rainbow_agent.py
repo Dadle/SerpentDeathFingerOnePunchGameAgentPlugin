@@ -48,6 +48,7 @@ class Agent:
         with torch.no_grad():
             #print("state shape:", state.shape, "state type:", type(state))
             #print("torch state shape:", torch.tensor(state, dtype=torch.float32, device=self.args.device).shape, "torch type:", type(torch.tensor(state, dtype=torch.float32, device=self.args.device)))
+            #state = state.reshape(4,139,139,3)
             return (self.online_net(torch.tensor(state, dtype=torch.float32, device=self.args.device).unsqueeze(0)) * self.support).sum(2).argmax(1).item()
 
     # Acts with an ε-greedy policy (used for evaluation only)

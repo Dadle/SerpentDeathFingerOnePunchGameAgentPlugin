@@ -45,7 +45,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
 
         # To avoid issues with GPU memory when using both Keras and Pytorch at the same time
         # Forcing Keras to run on CPU since this is a pretrained classifier that does not need GPU acceleration
-        config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.7))
+        config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.5))
                                 #intra_op_parallelism_threads=4,
                                 #inter_op_parallelism_threads=4, allow_soft_placement=True,
                                 #device_count={'CPU': 4, 'GPU': 0})
@@ -151,7 +151,7 @@ class SerpentDeathFingerOnePunchGameAgent(GameAgent):
         frame_buffer = self.game_frame_buffer.frames
 
         context_frame = FrameGrabber.get_frames([0], frame_type="FULL").frames[0]
-        context = self.machine_learning_models["context_classifier"].predict(context_frame.frame)
+        context = self.machine_learning_models["context_classifier"].predict(frame_buffer[0].frame)  # context_frame.frame)
         self.game_state.current_context = context
         self.game_state.not_playing_context_counter += 1
         self.move_time = time.time() - self.move_time_start
