@@ -1,5 +1,6 @@
 # SerpentDeathFingerOnePunchGameAgentPlugin
 SerpentAI Game Agent plugin for the game One Finger Death Punch
+![image](https://github.com/Dadle/SerpentDeathFingerOnePunchGameAgentPlugin/assets/16399255/7d0d2c00-52f9-4974-a819-7a3840e822cb)
 
 ## Installation
 1. Install SerpentAI: https://github.com/SerpentAI/SerpentAI/wiki/Windows-Installation-Guide
